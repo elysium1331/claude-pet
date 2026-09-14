@@ -19,6 +19,10 @@ const DEFAULTS = {
   credentialsPath: null, // null = ~/.claude/.credentials.json
   scopedLimit: null, // which per-model weekly limit drives the third orb; null = first one reported
   lightBackdrop: 'auto', // true | false | 'auto' (follow the Windows light/dark setting)
+  palette: 0, // color theme index, if the pet has themes
+  nightMode: 'auto', // true | false | 'auto' (softer glow between nightStartHour and nightEndHour)
+  nightStartHour: 22,
+  nightEndHour: 7,
   petPosition: null,
 };
 

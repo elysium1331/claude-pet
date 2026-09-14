@@ -1,8 +1,20 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, shouldGreet, restingPose,
+  insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, shouldGreet, restingPose, isNightTime,
 } = require('../src/main/behavior');
+
+test('isNightTime handles windows that wrap past midnight', () => {
+  const at = (h, m = 0) => new Date(2026, 8, 14, h, m);
+  assert.equal(isNightTime(at(23), 22, 7), true);
+  assert.equal(isNightTime(at(3), 22, 7), true);
+  assert.equal(isNightTime(at(7), 22, 7), false);
+  assert.equal(isNightTime(at(12), 22, 7), false);
+  assert.equal(isNightTime(at(21, 59), 22, 7), false);
+  // a window that doesn't wrap
+  assert.equal(isNightTime(at(2), 1, 5), true);
+  assert.equal(isNightTime(at(6), 1, 5), false);
+});
 
 test('restingPose sits on the taskbar instead of floating, when the pet can sit', () => {
   const sitter = { states: { idle: 0, sitting: 13 } };

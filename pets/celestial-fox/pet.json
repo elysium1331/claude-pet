@@ -24,8 +24,13 @@
     "lookYProperty": "lookY",
     "heldProperty": "held",
     "dragLeanProperty": "dragLean",
-    "happinessProperty": "happiness"
+    "happinessProperty": "happiness",
+    "growthProperty": "growth",
+    "paletteProperty": "palette",
+    "nightModeProperty": "nightMode"
   },
+  "maxGrowth": 3,
+  "palettes": ["Celestial blue", "Rose gold", "Mint aqua", "Violet silver"],
   "states": {
     "idle": 0,
     "sleeping": 1,
@@ -78,12 +83,12 @@
     { "trigger": "scratchEar", "ms": 2000, "states": ["idle", "lounging", "sitting"] },
     { "trigger": "sneeze", "ms": 1500, "states": ["idle", "sitting"] }
   ],
-  "bodyInsets": { "top": 0.045, "right": 0.123, "bottom": 0.078, "left": 0.123 },
+  "bodyInsets": { "top": 0.045, "right": 0.121, "bottom": 0.065, "left": 0.121 },
   "stateInsets": {
-    "lounging": { "top": 0.662, "right": 0.195, "bottom": 0.017, "left": 0.018 },
+    "lounging": { "top": 0.653, "right": 0.195, "bottom": 0.017, "left": 0.018 },
     "sitting": { "top": 0.552, "right": 0.184, "bottom": 0.012, "left": 0.018 },
-    "held": { "top": 0.028, "right": 0.121, "bottom": 0.05, "left": 0.121 },
-    "chasing": { "top": 0.053, "right": 0.123, "bottom": 0.06, "left": 0.123 }
+    "held": { "top": 0.028, "right": 0.121, "bottom": 0.038, "left": 0.121 },
+    "chasing": { "top": 0.05, "right": 0.121, "bottom": 0.025, "left": 0.121 }
   },
   "size": { "width": 560, "height": 600 }
 }

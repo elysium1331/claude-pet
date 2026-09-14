@@ -100,6 +100,9 @@ function applyPet() {
   setBoolean(vm, binding.lightBackdropProperty, lastView.lightBackdrop);
   setBoolean(vm, binding.hoveredProperty, hovered);
   setNumber(vm, binding.happinessProperty, lastView.happiness ?? 50);
+  setNumber(vm, binding.growthProperty, lastView.growth ?? 0);
+  setNumber(vm, binding.paletteProperty, lastView.palette ?? 0);
+  setBoolean(vm, binding.nightModeProperty, !!lastView.nightMode);
   setBoolean(vm, binding.heldProperty, held.held);
   setNumber(vm, binding.dragLeanProperty, held.lean);
   setNumber(vm, binding.statsSideProperty, stats.side === 'below' ? 1 : 0); // side must be set before open

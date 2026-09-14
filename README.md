@@ -21,7 +21,9 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 - **Rub** the cursor back and forth over it to pet it.
 - **Double-click** for a trick; **triple-click** to tickle it.
 - Right-click → **Play**: feed it a spark, have it chase your cursor, or ask for a trick. The same menu shows its happiness and level.
-- Playing and finished Claude Code tasks raise its happiness and experience; ignored for hours, it gets a little droopy. Levels unlock growth looks in pets that have them.
+- Playing and finished Claude Code tasks raise its happiness and experience; ignored for hours, it gets a little droopy.
+- It grows as it levels up (level 1 at 30 XP, 2 at 120, 3 at 300): longer tail wisps, then an extra antenna pearl and brighter stars, then a soft halo and crown.
+- Right-click → **Appearance** to pick a color theme (celestial blue, rose gold, mint aqua, violet silver) and the night glow: softer light between 10 PM and 7 AM by default, or always / never. The usage orbs keep their colors in every theme.
 - Tray icon: show/hide, refresh now, open Claude's usage page, launch at startup, settings.
 - `Ctrl+Alt+P` hides or shows it (for windowed games, screen shares, and so on). While hidden it stays silent.
 
@@ -82,6 +84,8 @@ Right-click the pet or the tray icon and choose **Open settings file**. Restart 
 | `launchAtStartup` | `false` | Also toggleable from the tray menu |
 | `claudeProcessNames` | `["claude.exe", "claude"]` | Processes that count as "Claude is running" |
 | `scopedLimit` | `null` | Which per-model weekly limit to show (e.g. `"Fable"`); `null` = first one reported |
+| `palette` | `0` | Color theme (also in right-click → Appearance) |
+| `nightMode` | `"auto"` | Softer night glow: `true`, `false`, or `"auto"` (between `nightStartHour` and `nightEndHour`, default 22–7) |
 | `lightBackdrop` | `"auto"` | Stronger outline for light desktops: `true`, `false`, or `"auto"` (follows Windows theme) |
 | `credentialsPath` | `null` | Custom path to Claude Code's credentials file |
 | `pet` | `"celestial-fox"` | Folder name under `pets/` |

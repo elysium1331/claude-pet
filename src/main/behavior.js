@@ -57,12 +57,21 @@ function shouldGreet(lastGreetDate, now = new Date()) {
   return lastGreetDate !== localDateKey(now);
 }
 
+// Whether `now` falls in the night window [startHour, endHour), which may wrap past midnight.
+function isNightTime(now, startHour, endHour) {
+  const hour = now.getHours() + now.getMinutes() / 60;
+  return startHour <= endHour
+    ? hour >= startHour && hour < endHour
+    : hour >= startHour || hour < endHour;
+}
+
 // On the taskbar with nothing going on, a pet that can sit sits instead of floating.
 function restingPose(pet, state, grounded) {
   return state === 'idle' && grounded && 'sitting' in (pet.states || {}) ? 'sitting' : state;
 }
 
 module.exports = {
+  isNightTime,
   restingPose,
   insetsForState,
   wakeReaction,

@@ -1,8 +1,8 @@
-# Celestial Fox — revision 4, Batch 3
+# Celestial Fox — revision 4, complete animation set
 
 **Runtime file:** `celestial-fox.riv` · **Artboard:** `CelestialFox` · **State machine:** `PetStateMachine` · **View model:** `PetController` (default instance).
 
-One transparent **560 × 600** artboard. Batches 1–3 are implemented. Batch 4 is not included. All prior named IDs and animation definitions are preserved. Batch 3 adds cursor chasing, ground sitting, dragging, subtle happiness controls and ten play reactions.
+One transparent **560 × 600** artboard. All four batches are implemented. Batch 4 adds cumulative growth tiers, four color palettes and night mode. All prior named IDs, states, triggers, property defaults and animation definitions are preserved.
 
 ## Persistent states
 
@@ -68,7 +68,7 @@ Durations below are authored timeline lengths. The automatic blend back can add 
 
 Visibility has its own animation layer and can run alongside fidgets. `disappear` intentionally hides the whole pet, including meters, as required by its fully invisible endpoint. If `statsOpen` remains true, `appear` restores the pet with the meters still hidden for the stats panel. `perkUp` does not cancel a latched `disappear`; call `appear` to unhide.
 
-## All view-model properties (45)
+## All view-model properties (48)
 
 | Property | Type | Range | Default | Effect |
 |---|---|---|---|---|
@@ -117,6 +117,10 @@ Visibility has its own animation layer and can run alongside fidgets. `disappear
 | `trickSpin` | Trigger | Event | Not fired | Loop-de-loop |
 | `trickFlip` | Trigger | Event | Not fired | Somersault |
 | `levelUp` | Trigger | Event | Not fired | Celebration burst and proud pose |
+| `growth` | Number | Integer 0–3 | `0` | Cumulative cosmetic tiers: base, longer wisps, extra pearl/stars, then a halo/crown |
+| `palette` | Number | Integer 0–3 | `0` | 0 celestial blue/peach, 1 rose/gold, 2 mint/aqua, 3 violet/silver |
+| `nightMode` | Boolean | false / true | `false` | Softer, dimmer character lights; preserves the readable meters and dark legibility outlines |
+
 
 Supply usage data and colors from the app; the file makes no network requests. Rings fill clockwise from the top. `0` is empty/dim and `100` is full. Decimal percentages work, and visual fill clamps to 0–100. **Built-in calm/amber/red banding is disabled.** Each Color property independently drives its meter's fill ring and ring glow, plus its soft halo/core illumination. Changing a usage Number changes the fill amount, not the ring color. The app supplies its own blue → yellow → orange → red interpolation and timing; color updates are immediate in the file. Set opaque RGB colors for normal use; color alpha also modulates the colored artwork. Glow has an additional fixed soft falloff. The 1/2/3-dot marks remain opaque white (`#FFFFFF`), upright, and independent of the supplied color. At 140 × 150, each meter shell is approximately 20 px across and the fill ring approximately 2.2 px thick.
 
@@ -149,7 +153,31 @@ Set `dragLean` from drag velocity/direction, with screen-right positive. The cha
 
 On release, set `held = false`, select the desired persistent destination, and fire `land`. Landing briefly uses a compact contact pose on y=590, with meters staged to the left, then returns to the selected pose. Choose state 13 before landing if the pet should remain on the ground. The landing contact is around x=350 to keep the face away from the readable meters. Full-body landing/tricks add a 400 ms return blend to their authored durations; other reactions add up to 180 ms.
 
-Tricks tuck the character into a smaller pose above the meters and return to the live destination pose. Internal full-turn angle normalization resets an equivalent 360° angle to 0° with no visible pose change. `catchOrb` uses a separate decorative spark; it never consumes a usage meter. `levelUp` is a reaction only; Batch 4 growth cosmetics are not present yet.
+Tricks tuck the character into a smaller pose above the meters and return to the live destination pose. Internal full-turn angle normalization resets an equivalent 360° angle to 0° with no visible pose change. `catchOrb` uses a separate decorative spark; it never consumes a usage meter. `levelUp` is a reaction only. The app can set `growth` and fire `levelUp` together; the trigger does not award a tier by itself.
+
+## Cosmetics
+
+All cosmetic changes use the existing rig and keep the 560 × 600 artboard. Growth and palette changes blend over 300 ms; night mode blends over 400 ms. Defaults (`growth = 0`, `palette = 0`, `nightMode = false`) retain the earlier appearance. Reactions, held, stats, gaze and hover continue to work with cosmetics enabled.
+
+| Growth | Added details, cumulative |
+|---:|---|
+| 0 | Base pet from Batches 1–3 |
+| 1 | Longer peach and blue tail wisps, skinned to the existing tail bones; a matching extra sweep on the sitting tail |
+| 2 | One additional antenna pearl and brighter star details attached to the moving ears and head |
+| 3 | Soft elliptical halo and small crown rays between the ears |
+
+| Palette | Character colors |
+|---:|---|
+| 0 | Celestial blue / peach; original paint values |
+| 1 | Rose / gold |
+| 2 | Mint / aqua |
+| 3 | Violet / silver |
+
+Palettes preserve the authored transparency and lightness relationships. The dark translucent legibility rim/under-shadow retains its deep-blue contrast treatment. **Usage meters are excluded from palette and night-mode changes.** `sessionColor`, `weeklyColor` and `fableColor` remain app-controlled; there is no restored automatic warning banding. The white 1/2/3-dot marks remain white. State 11 continues to render its temporary grey connection treatment and restores the latest app colors on exit.
+
+Night mode reduces soft radial light to about 48% intensity, star fields to 60%, and eye/halo highlights to 78%, through opacity wrappers. It adds no blur effect, does not dim the usage data, and does not paint a background. It composes with `lightBackdrop`, sleeping/tired dimming, happiness, visibility and growth. The app owns time-of-day scheduling and tier persistence; the `.riv` has no clock, storage or usage-fetching code.
+
+Supply integer `growth` and `palette` values in 0–3. Values outside that set have no defined new selection; use the documented values rather than tweening these selector Numbers. The file handles the visual blend after a valid selection.
 
 ## Ground and visible bounds
 
@@ -157,13 +185,15 @@ Ground contact is authored at **y = 590**. A small luminous rim/under-shadow may
 
 Approximate visible bounds include meters, decoration, and glow with alpha ≥ 16/255, sampled across the independent orbit and pose loops. Coordinates are **left / top / right / bottom** in artboard pixels; soft outermost glow can extend a little farther.
 
-| Pose | Approximate bounds | Status |
+| Pose | Growth 0 bounds | Growth 3 bounds |
 |---|---|---|
-| Floating idle | `69 / 27 / 491 / 553` | Batch 1 |
-| Lounging | `10 / 397 / 451 / 598` | Batch 1 |
-| Sitting | `10 / 331 / 457 / 593` | Batch 3 |
-| Held | `68 / 17 / 492 / 570` | Batch 3; neutral dragLean |
-| Chasing | `69 / 32 / 491 / 564` | Batch 3; facing right |
+| Floating idle | `68 / 27 / 492 / 553` | `68 / 27 / 492 / 561` |
+| Lounging | `10 / 392 / 451 / 598` | `10 / 392 / 451 / 598` |
+| Sitting | `10 / 331 / 457 / 593` | `10 / 331 / 457 / 593` |
+| Held, neutral dragLean | `68 / 17 / 492 / 570` | `68 / 17 / 492 / 577` |
+| Chasing, facing right | `68 / 30 / 492 / 578` | `68 / 30 / 492 / 585` |
+
+Tiers 1 and 2 share the tier-3 sampled outer bounds. The denser sampling used for this final table catches more phases of the short chasing loop than earlier maps. All growth comparisons passed the ±5% limit; the greatest sampled height increase was about 1.6%, with no sampled width increase. The layout box stays exactly 560 × 600.
 
 ## Integration with @rive-app/webgl2 2.42.1
 
@@ -188,6 +218,9 @@ const pet = new Rive({
     vm.color('weeklyColor').rgb(255, 208, 139);
     vm.color('fableColor').rgb(255, 153, 124);
     vm.boolean('lightBackdrop').value = true; // White/light window
+    vm.number('growth').value = 3;
+    vm.number('palette').value = 0;
+    vm.boolean('nightMode').value = false;
     vm.trigger('appear').trigger();
   },
 });
@@ -234,23 +267,24 @@ Runtime caveats:
 
 `celestial-fox-source.zip` contains editable RML artwork, rig, timelines, data bindings, state machine, `rive.yaml`, this map, and verification reports. Compile from that source with **Rive CLI 1.0.3** (or compatible newer tooling): `rive . --once`. The `.riv` is the compiled runtime deliverable. An editor `.rev` file is not included.
 
-Artwork uses only vector paths, gradients, transforms, and a three-bone skinned tail. There are no embedded images, fonts, audio, scripts, or external runtime assets. The runtime file is 187,458 bytes (about 183 KiB), comfortably below the requested approximately 400 KB limit.
+Artwork uses only vector paths, gradients, transforms, and a three-bone skinned tail. There are no embedded images, fonts, audio, scripts, or external runtime assets. The runtime file is 241,849 bytes (about 236 KiB), comfortably below the requested approximately 400 KB limit.
 
-Four contact sheets show every new loop/reaction plus the held pose, with individual cells rendered directly at 560 × 600 or 140 × 150 in WebGL2 2.42.1. White previews enable `lightBackdrop`. All previews use sample usage 42/78/94, with the app explicitly supplying colors `#B7E7FF`, `#FFD08B`, and `#FF997C`; these are preview choices, not automatic thresholds. The GIF pack contains one looping comparison clip per new animation, with dark and white versions side by side. GIF repetition is a preview convenience: reactions remain one-shot in the `.riv`, and `goodbye` does not disappear by itself.
+Four final contact sheets show all sixteen growth/palette combinations, followed by growth 3 in night mode for each palette. Cells are rendered directly at 560 × 600 or 140 × 150 in WebGL2 2.42.1. Each sheet is available on dark and white; white previews enable `lightBackdrop`. Sample usage is 42/78/94, with app-supplied colors `#B7E7FF`, `#FFD08B` and `#FF997C`. Those colors remain constant across the cosmetic grid.
+
+Three GIF comparisons show growth changes, palette changes and night mode, with dark and white versions side by side. Changes in the GIFs are driven by the preview app; the production file changes cosmetics only when the app changes their properties. Earlier batch bundles retain their loop/reaction preview collections.
 
 Verification in **@rive-app/webgl2 2.42.1**:
 
-- **1,368/1,368** — State, reaction, stats, gaze, hover, visibility and face clearance.
-- **489/489** — Live ring/glow colors and white meter marks.
-- **41/41** — Usage events and retained app data.
-- **261/261** — Held, drag lean, facing, happiness, left-facing play and public high-level APIs.
-- **57 prior timelines and 144 prior pet-state transitions preserved**, along with every existing named ID.
+- **1,368/1,368** state, trigger, stats, gaze, hover, visibility and face-clearance checks across all 14 states and 28 triggers.
+- **489/489** existing live ring/glow color and white-dot checks.
+- **41/41** usage-event checks and preserved app data.
+- **261/261** held, drag lean, facing, happiness, play and public high-level API checks.
+- **509/509** cosmetic checks, including all 448 state/growth/palette/night combinations, actual visible changes, meter isolation, reversibility, defaults and public APIs.
+- **15/15** growth-bounds comparisons across idle, lounging, chasing, sitting and held, all within ±5% of the corresponding growth-0 bounds.
+- **92 prior timelines, 210 prior pet-state transitions and every existing named ID preserved.** One artboard, one state machine, no embedded assets.
 
-Validation includes actual rendered pixels for meter colors and usage events, all fourteen states, repeated firing of all twenty-eight triggers, held transitions, play reactions while held, stats, gaze, hover, preserved application data and sampled face clearance. Checks sample authored motion and orbit phases; they do not prove every possible combination of simultaneous app input. Use one body reaction at a time when the complete gesture should be seen.
+Pixel comparisons account for small soft-edge differences observed between repeated WebGL renders of the same file. Default paint values and existing rig/timeline definitions remain intact. Bounds and face clearance sample authored motion and independent orbit phases; they do not prove every possible simultaneous app-input combination. Reserve the full artboard and fire one body reaction at a time when the whole gesture should finish.
 
-Source verification confirms preserved prior IDs, animation definitions and pet-state transitions, one artboard, one state machine, and no embedded assets. The source archive rebuilds to the delivered runtime file. Bounds are sampled at neutral dragLean and default happiness; reserve the full artboard for effects and lean.
+A 600-frame native benchmark on this machine measured mean animation advance of 0.112 ms and rendering of 0.204 ms at 560 × 600. These are local native measurements, not a browser/GPU performance guarantee. Pause when the host is offscreen and respect reduced-motion preferences in the app.
 
-A 600-frame native benchmark on this machine measured mean animation advance of 0.083 ms and mean rendering of 0.221 ms at 560 × 600. These are local native measurements, not a browser/GPU performance guarantee.
-
-Batch 3 is complete. Batch 4 requires a separate continuation.
-
+The source archive rebuilds byte-for-byte to the delivered runtime file using Rive CLI 1.0.3. All four requested batches are complete.

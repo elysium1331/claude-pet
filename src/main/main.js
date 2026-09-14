@@ -13,6 +13,7 @@ const { levelFor, colorForPercent, choosePetState, formatReset, formatCountdown,
 const { ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets } = require('./placement');
 const {
   restingPose, insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey, shouldGreet,
+  isNightTime,
 } = require('./behavior');
 const { ClaudeActivity } = require('./claude-activity');
 const { startHookServer } = require('./hook-server');
@@ -79,6 +80,8 @@ let quitting = false;
 let appTimers = [];
 let life = null;
 let lifeSaveTimer = null;
+let displayedGrowth = 0; // lags behind life.level until the level-up celebration plays
+let lastNightMode = null;
 let clickCount = 0;
 let clickTimer = null;
 let nextTrick = 0;
@@ -97,6 +100,9 @@ function parseArgs(argv) {
     claudeRunning: get('claude-running'), // 'true' | 'false' to override process detection
     petState: get('pet-state'), // force a pet state, e.g. 'lounging'
     debugHooks: argv.includes('--debug-hooks'), // log Claude Code hook events to the console
+    growth: get('growth'), // force a growth tier for screenshots
+    palette: get('palette'), // force a color theme for screenshots
+    night: get('night'), // 'true' | 'false' to force night glow
     startAt: startAt?.length === 2 && startAt.every(Number.isFinite) ? { x: startAt[0], y: startAt[1] } : null,
   };
 }
@@ -161,8 +167,27 @@ function rewardPet(kind) {
   life = result.life;
   scheduleLifeSave();
   pushView();
-  if (result.leveledUp) setTimeout(() => playEvent('levelUp'), 2800); // after the reaction that earned it
+  if (result.leveledUp) {
+    // after the reaction that earned it: grow and celebrate together
+    setTimeout(() => {
+      displayedGrowth = life.level;
+      pushView();
+      playEvent('levelUp');
+    }, 2800);
+  }
   return result.rewarded;
+}
+
+function nightModeOn(now = new Date()) {
+  if (config.nightMode === 'auto') return isNightTime(now, config.nightStartHour, config.nightEndHour);
+  return !!config.nightMode;
+}
+
+function setAppearance(key, value) {
+  config[key] = value;
+  if (!args.snapshot) saveConfig(userDataDir(), config);
+  pushView();
+  refreshTrayMenu();
 }
 
 // ---------- view model sent to both windows ----------
@@ -203,6 +228,9 @@ function buildView() {
     },
     flipped: isFlipped(),
     happiness: Math.round(life.happiness),
+    growth: Math.min(pet.maxGrowth ?? 0, args.growth !== undefined ? Number(args.growth) : displayedGrowth),
+    palette: Math.min(Math.max(0, (pet.palettes?.length || 1) - 1), Math.max(0, Number(args.palette ?? config.palette) || 0)),
+    nightMode: args.night !== undefined ? args.night === 'true' : nightModeOn(now),
     status,
     message,
     updatedAgo: formatAgo(fetchedAt, now),
@@ -334,6 +362,12 @@ function maybeFidget(now) {
 function tick() {
   if (!usage || !windowAlive(petWin) || !life || quitting) return;
   const now = Date.now();
+
+  const night = nightModeOn();
+  if (night !== lastNightMode) {
+    lastNightMode = night;
+    pushView();
+  }
 
   if (now - life.updatedAt > 60_000) {
     const before = Math.round(life.happiness);
@@ -747,6 +781,18 @@ function buildMenu() {
         { label: 'Do a trick', enabled: awake, click: doTrick },
       ],
     },
+    {
+      label: 'Appearance',
+      submenu: [
+        ...(pet.palettes || []).map((name, i) => ({
+          label: name, type: 'radio', checked: Number(config.palette) === i, click: () => setAppearance('palette', i),
+        })),
+        ...(pet.palettes?.length ? [{ type: 'separator' }] : []),
+        { label: 'Night glow: automatic', type: 'radio', checked: config.nightMode === 'auto', click: () => setAppearance('nightMode', 'auto') },
+        { label: 'Night glow: always', type: 'radio', checked: config.nightMode === true, click: () => setAppearance('nightMode', true) },
+        { label: 'Night glow: never', type: 'radio', checked: config.nightMode === false, click: () => setAppearance('nightMode', false) },
+      ],
+    },
     { label: petWin?.isVisible() ? 'Hide pet' : 'Show pet', accelerator: config.hideHotkey, registerAccelerator: false, click: toggleVisible },
     { label: 'Refresh usage now', click: () => usage.refreshNow() },
     { label: 'Open Claude usage page', click: () => shell.openExternal(USAGE_PAGE) },
@@ -908,6 +954,7 @@ app.whenReady().then(async () => {
   config = loadConfig(userDataDir());
   pet = loadPet(config.pet);
   life = loadLife();
+  displayedGrowth = life.level;
   serveAppFiles();
   registerIpc();
 
