@@ -11,6 +11,9 @@ const DEFAULTS = {
   loungeOnTaskbar: true, // drift down onto the taskbar before lying down
   sleepWhenAwayMinutes: 10, // no keyboard/mouse input on the computer for this long -> sleep
   fidgets: true, // occasional idle animations, if the pet has them
+  roam: 'taskbar', // 'off' | 'taskbar' | 'screen': occasionally take a little trip and come back
+  roamMinMinutes: 10,
+  roamMaxMinutes: 25,
   hooksPort: 47821, // local port Claude Code hooks send events to
   celebrateAfterSeconds: 20, // only celebrate Claude Code turns that took at least this long
   hideHotkey: 'CommandOrControl+Alt+P',

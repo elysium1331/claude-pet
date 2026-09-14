@@ -67,6 +67,7 @@
     "bonk": "bonk",
     "dizzy": "dizzy",
     "tricks": ["trickSpin", "trickFlip"],
+    "roamPause": ["lookAround", "scratchEar"],
     "levelUp": "levelUp"
   },
   "timings": {

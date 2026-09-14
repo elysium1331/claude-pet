@@ -2,7 +2,13 @@
 const canvas = document.getElementById('pet');
 
 // If a pet file doesn't have a state yet, show the closest one it does have.
-const FALLBACK_STATES = { lounging: 'sleeping', disconnected: 'needsAttention', workingBusy: 'working' };
+const FALLBACK_STATES = {
+  lounging: 'sleeping',
+  disconnected: 'needsAttention',
+  workingBusy: 'working',
+  walking: 'chasing',
+  floatingTravel: 'chasing',
+};
 const LOOK_SMOOTHING = 0.18;
 
 let petConfig = null;

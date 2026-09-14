@@ -21,6 +21,7 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 - **Rub** the cursor back and forth over it to pet it.
 - **Double-click** for a trick; **triple-click** to tickle it.
 - Right-click → **Play**: feed it a spark, have it chase your cursor, or ask for a trick. The same menu shows its happiness and level.
+- **Free roam**: every 10–25 minutes, when nothing's going on, it takes a little trip along the taskbar (or, if you allow it, somewhere on screen), pauses to look around, and comes back. It waits for your cursor to move out of its way, heads home if Claude needs you, and clicking it calls it home. Choose off / along the taskbar / anywhere on screen under right-click → **Play**, or send it on a stroll right away.
 - Playing and finished Claude Code tasks raise its happiness and experience; ignored for hours, it gets a little droopy.
 - It grows as it levels up (level 1 at 30 XP, 2 at 120, 3 at 300): longer tail wisps, then an extra antenna pearl and brighter stars, then a soft halo and crown.
 - Right-click → **Appearance** to pick a color theme (celestial blue, rose gold, mint aqua, violet silver) and the night glow: softer light between 10 PM and 7 AM by default, or always / never. The usage orbs keep their colors in every theme.
@@ -78,6 +79,8 @@ Right-click the pet or the tray icon and choose **Open settings file**. Restart 
 | `loungeOnTaskbar` | `true` | Drift down onto the taskbar before lounging |
 | `sleepWhenAwayMinutes` | `10` | Minutes without keyboard/mouse input before it sleeps |
 | `fidgets` | `true` | Occasional idle animations (if the pet has them) |
+| `roam` | `"taskbar"` | Free roam: `"off"`, `"taskbar"` or `"screen"` |
+| `roamMinMinutes` / `roamMaxMinutes` | `10` / `25` | How long it waits between trips |
 | `hooksPort` | `47821` | Local port Claude Code hooks send events to (reconnect after changing) |
 | `celebrateAfterSeconds` | `20` | Only celebrate Claude Code tasks that took at least this long |
 | `hideHotkey` | `CommandOrControl+Alt+P` | Show/hide shortcut |

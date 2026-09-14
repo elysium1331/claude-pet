@@ -13,13 +13,14 @@ const { levelFor, colorForPercent, choosePetState, formatReset, formatCountdown,
 const { ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets } = require('./placement');
 const {
   restingPose, insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey, shouldGreet,
-  isNightTime,
+  isNightTime, resolveState,
 } = require('./behavior');
 const { ClaudeActivity } = require('./claude-activity');
 const { startHookServer } = require('./hook-server');
 const hooksInstaller = require('./hooks-installer');
 const { classifyClicks, StrokeDetector, edgeBump } = require('./gestures');
 const petLife = require('./pet-life');
+const { shouldStartRoam, planRoam, stepToward, roamDelayMs } = require('./roam');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SERVED_DIRS = ['src/renderer', 'node_modules/@rive-app/webgl2', 'pets'].map((d) => path.join(ROOT, d) + path.sep);
@@ -35,6 +36,8 @@ const CLICK_GAP_MS = 280; // clicks closer together than this count as one burst
 const CHASE_MS = 8000;
 const CHASE_STEP_PX = 14;
 const BONK_COOLDOWN_MS = 1500;
+const ROAM_STEP_MS = 30;
+const ROAM_OK_STATES = new Set(['idle', 'sitting', 'lounging']);
 
 const args = parseArgs(process.argv);
 
@@ -64,6 +67,8 @@ let facing = 1; // 1 = right, -1 = left
 let drag = null;
 let glide = null;
 let chase = null;
+let roam = null;
+let nextRoamAt = 0;
 
 let statsOpen = false;
 let panelSize = { width: 212, height: 180 };
@@ -103,6 +108,7 @@ function parseArgs(argv) {
     growth: get('growth'), // force a growth tier for screenshots
     palette: get('palette'), // force a color theme for screenshots
     night: get('night'), // 'true' | 'false' to force night glow
+    roamNow: argv.includes('--roam-now'), // start a free-roam trip right after launch
     startAt: startAt?.length === 2 && startAt.every(Number.isFinite) ? { x: startAt[0], y: startAt[1] } : null,
   };
 }
@@ -193,7 +199,10 @@ function setAppearance(key, value) {
 // ---------- view model sent to both windows ----------
 
 function displayState() {
-  return args.petState || (chase ? 'chasing' : petState);
+  if (args.petState) return args.petState;
+  if (chase) return 'chasing';
+  if (roam?.plan) return roamPose();
+  return petState;
 }
 
 function pickScoped(u) {
@@ -218,7 +227,7 @@ function buildView() {
   }));
   const orbs = { session: u?.session?.percent ?? 0, weekly: u?.weekly?.percent ?? 0, model: scoped?.percent ?? 0 };
   return {
-    petState: displayState(),
+    petState: resolveState(pet, displayState()),
     meters,
     orbs,
     orbColors: {
@@ -349,7 +358,7 @@ function computePetState(now = Date.now()) {
 
 function maybeFidget(now) {
   if (now < nextFidgetAt) return;
-  const options = config.fidgets && !statsOpen && !drag && !chase && petWin.isVisible() ? fidgetsFor(pet, displayState()) : [];
+  const options = config.fidgets && !statsOpen && !drag && !chase && !roam && petWin.isVisible() ? fidgetsFor(pet, displayState()) : [];
   if (!options.length) {
     nextFidgetAt = now + 5000;
     return;
@@ -381,13 +390,26 @@ function tick() {
     sendReaction(wakeReaction(pet, petState, next));
     petState = next;
     pushView();
-    if (!chase && !drag) {
+    if (!chase && !drag && !roam) {
       // Poses occupy different parts of the pet box, so settle into the new pose's bounds.
       if (displayState() === 'lounging' && config.loungeOnTaskbar) glideToGround();
       else settlePet();
     }
   } else if (now - lastViewPush > VIEW_REFRESH_MS) {
     pushView(); // keeps reset countdowns fresh
+  }
+
+  if (roam && !ROAM_OK_STATES.has(petState)) {
+    cancelRoam({ returnHome: true }); // Claude needs attention, a limit was hit, etc.
+  } else if (!roam && shouldStartRoam({
+    mode: config.roam,
+    now,
+    nextRoamAt,
+    state: petState,
+    busy: statsOpen || !!drag || !!chase || !petWin.isVisible(),
+    petIdleMs: now - lastInteraction,
+  })) {
+    startRoam();
   }
   maybeFidget(now);
 }
@@ -396,6 +418,10 @@ function tick() {
 
 function registerClick() {
   markInteraction();
+  if (roam) {
+    cancelRoam({ returnHome: true }); // clicking a roaming pet calls it home
+    return;
+  }
   clickCount += 1;
   clearTimeout(clickTimer);
   clickTimer = setTimeout(() => {
@@ -425,6 +451,7 @@ function feedPet() {
 
 function startChase() {
   if (chase || !petWin.isVisible() || displayState() === 'sleeping') return;
+  if (roam) cancelRoam({ returnHome: false });
   closeStats();
   cancelGlide();
   markInteraction();
@@ -470,6 +497,115 @@ function endChase(caught) {
   settlePet();
 }
 
+// ---------- free roam ----------
+
+function scheduleNextRoam(now = Date.now()) {
+  nextRoamAt = now + roamDelayMs(config.roamMinMinutes, config.roamMaxMinutes);
+}
+
+function roamPose() {
+  const pausing = roam.pauseUntil > 0;
+  if (roam.plan.kind === 'stroll') return pausing ? 'sitting' : 'walking';
+  return pausing ? 'idle' : 'floatingTravel';
+}
+
+function startRoam() {
+  if (roam || chase || drag || !windowAlive(petWin) || !petWin.isVisible()) return;
+  closeStats();
+  cancelGlide();
+  const workArea = workAreaAt(petCenter());
+  const options = placementOptions(workArea);
+  const clamp = (p) => {
+    const placed = clampPet(p, { ...options, snapPx: 0 });
+    return { x: placed.x, y: placed.y };
+  };
+  const plan = planRoam({
+    home: { ...petPos },
+    mode: config.roam === 'off' ? 'taskbar' : config.roam,
+    workArea,
+    petSize: PET_SIZE,
+    clamp,
+    groundY: clampPet({ x: petPos.x, y: Number.MAX_SAFE_INTEGER }, options).y,
+    cursor: screen.getCursorScreenPoint(),
+  });
+  const wasResting = petState === 'lounging';
+  roam = { plan, home: { ...petPos }, index: 0, pauseUntil: 0, waitingSince: 0, timer: null };
+  if (wasResting) sendReaction(pet.reactions?.wake);
+  pushView();
+  roam.timer = setInterval(roamStep, ROAM_STEP_MS);
+}
+
+function roamStep() {
+  if (quitting || !roam || !windowAlive(petWin)) return;
+  const now = Date.now();
+  if (roam.pauseUntil) {
+    if (now < roam.pauseUntil) return;
+    roam.pauseUntil = 0;
+    advanceRoam();
+    return;
+  }
+
+  // If the cursor is right where the pet is, wait politely (but not forever).
+  const cursor = screen.getCursorScreenPoint();
+  const center = petCenter();
+  if (Math.hypot(cursor.x - center.x, cursor.y - center.y) < 110) {
+    roam.waitingSince = roam.waitingSince || now;
+    if (now - roam.waitingSince < 4000) return;
+  } else {
+    roam.waitingSince = 0;
+  }
+
+  const waypoint = roam.plan.waypoints[roam.index];
+  const dx = waypoint.x - petPos.x;
+  if (Math.abs(dx) > 8 && Math.sign(dx) !== facing) {
+    facing = Math.sign(dx);
+    pushView();
+  }
+  const next = stepToward(petPos, waypoint, roam.plan.kind === 'stroll' ? 3 : 5);
+  setPetBounds(next);
+  if (!next.arrived) return;
+
+  if (waypoint.pauseMs > 0) {
+    roam.pauseUntil = now + waypoint.pauseMs;
+    pushView();
+    playEvent('roamPause');
+  } else {
+    advanceRoam();
+  }
+}
+
+function advanceRoam() {
+  roam.index += 1;
+  if (roam.index >= roam.plan.waypoints.length) finishRoam();
+  else pushView();
+}
+
+function finishRoam() {
+  clearInterval(roam.timer);
+  roam = null;
+  scheduleNextRoam();
+  pushView();
+  playEvent('roamHome');
+  updateFacing();
+}
+
+// Stops a trip; returns where home was.
+function cancelRoam({ returnHome }) {
+  if (!roam) return null;
+  clearInterval(roam.timer);
+  const { home } = roam;
+  roam = null;
+  scheduleNextRoam();
+  pushView();
+  if (returnHome) glideTo(home, 500, updateFacing);
+  return home;
+}
+
+function setRoamMode(mode) {
+  if (mode === 'off') cancelRoam({ returnHome: true });
+  setAppearance('roam', mode);
+}
+
 // ---------- pet window placement ----------
 
 function petCenter(pos = petPos) {
@@ -485,7 +621,7 @@ function isFlipped() {
 }
 
 function currentInsets() {
-  return mirrorInsets(insetsForState(pet, drag ? 'held' : displayState()), isFlipped());
+  return mirrorInsets(insetsForState(pet, drag ? 'held' : resolveState(pet, displayState())), isFlipped());
 }
 
 function placementOptions(workArea) {
@@ -695,6 +831,8 @@ function showPet() {
 function hidePet() {
   closeStats();
   if (chase) endChase(false);
+  const home = cancelRoam({ returnHome: false });
+  if (home) setPetBounds(home); // reappear at home, not mid-trip
   sendReaction(pet.reactions?.disappear);
   setTimeout(() => {
     petWin.hide();
@@ -736,12 +874,14 @@ function stopTimers() {
   cancelGlide();
   if (chase) clearInterval(chase.timer);
   chase = null;
+  if (roam) clearInterval(roam.timer);
+  roam = null;
   usage?.stop();
 }
 
 // Eyes follow the mouse.
 function trackCursor() {
-  if (quitting || !windowAlive(petWin) || !petWin.isVisible() || drag || chase) return;
+  if (quitting || !windowAlive(petWin) || !petWin.isVisible() || drag || chase || (roam && !roam.pauseUntil)) return;
   const next = lookFromCursor({ cursor: screen.getCursorScreenPoint(), center: petCenter(), flipped: isFlipped() });
   if (Math.abs(next.x - lastLook.x) < 0.02 && Math.abs(next.y - lastLook.y) < 0.02) return;
   lastLook = next;
@@ -779,6 +919,11 @@ function buildMenu() {
         { label: 'Feed a spark', enabled: awake, click: feedPet },
         { label: 'Chase my cursor', enabled: awake, click: startChase },
         { label: 'Do a trick', enabled: awake, click: doTrick },
+        { label: 'Go for a stroll now', enabled: awake && !roam, click: startRoam },
+        { type: 'separator' },
+        { label: 'Free roam: off', type: 'radio', checked: config.roam === 'off', click: () => setRoamMode('off') },
+        { label: 'Free roam: along the taskbar', type: 'radio', checked: config.roam === 'taskbar', click: () => setRoamMode('taskbar') },
+        { label: 'Free roam: anywhere on screen', type: 'radio', checked: config.roam === 'screen', click: () => setRoamMode('screen') },
       ],
     },
     {
@@ -868,6 +1013,7 @@ function registerIpc() {
     cancelGlide();
     closeStats();
     if (chase) endChase(false);
+    cancelRoam({ returnHome: false }); // wherever you drop it becomes home
     const cursor = screen.getCursorScreenPoint();
     drag = { dx: cursor.x - petPos.x, dy: cursor.y - petPos.y, lastX: cursor.x, lean: 0, lastBonkAt: 0 };
     shakeDetector.reset();
@@ -937,9 +1083,11 @@ function registerIpc() {
 function scheduleSnapshot() {
   if (args.snapshotStats) setTimeout(openStats, 3500);
   if (args.reaction) setTimeout(() => sendReaction(args.reaction), 5000);
+  if (args.roamNow) setTimeout(startRoam, 2500);
   setTimeout(async () => {
     fs.writeFileSync(args.snapshot, (await petWin.webContents.capturePage()).toPNG());
     const work = workAreaAt(petCenter());
+    if (roam) console.log('[snapshot] roaming', roam.plan.kind, `waypoint ${roam.index + 1}/${roam.plan.waypoints.length}`, 'plan', JSON.stringify(roam.plan.waypoints));
     console.log('[snapshot] state', displayState(), 'pet bounds', JSON.stringify(petWin.getBounds()), 'grounded', grounded, 'flipped', isFlipped(), 'workArea', JSON.stringify(work));
     if (args.snapshotStats) {
       const panelFile = args.snapshot.replace(/\.png$/i, '-panel.png');
@@ -989,6 +1137,7 @@ app.whenReady().then(async () => {
   screen.on('display-removed', reclamp);
 
   nextFidgetAt = Date.now() + randomBetween(15_000, 30_000);
+  scheduleNextRoam();
   usage.start();
   setTimeout(watchClaude, CLAUDE_CHECK_MS);
   appTimers.push(setInterval(tick, TICK_MS), setInterval(trackCursor, LOOK_MS));

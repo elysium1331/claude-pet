@@ -57,6 +57,23 @@ function shouldGreet(lastGreetDate, now = new Date()) {
   return lastGreetDate !== localDateKey(now);
 }
 
+// Closest pose to use when a pet file doesn't have the requested one (yet).
+const STATE_FALLBACKS = {
+  lounging: 'sleeping',
+  disconnected: 'needsAttention',
+  workingBusy: 'working',
+  walking: 'chasing',
+  floatingTravel: 'chasing',
+};
+
+function resolveState(pet, state) {
+  const states = pet.states || {};
+  if (state in states) return state;
+  const fallback = STATE_FALLBACKS[state];
+  if (fallback in states) return fallback;
+  return 'idle' in states ? 'idle' : state;
+}
+
 // Whether `now` falls in the night window [startHour, endHour), which may wrap past midnight.
 function isNightTime(now, startHour, endHour) {
   const hour = now.getHours() + now.getMinutes() / 60;
@@ -71,6 +88,7 @@ function restingPose(pet, state, grounded) {
 }
 
 module.exports = {
+  resolveState,
   isNightTime,
   restingPose,
   insetsForState,

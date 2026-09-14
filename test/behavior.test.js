@@ -2,7 +2,18 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, shouldGreet, restingPose, isNightTime,
+  resolveState,
 } = require('../src/main/behavior');
+
+test('resolveState falls back to the closest pose a pet file actually has', () => {
+  const fox = { states: { idle: 0, sleeping: 1, working: 2, needsAttention: 3, chasing: 12, sitting: 13 } };
+  assert.equal(resolveState(fox, 'sitting'), 'sitting');
+  assert.equal(resolveState(fox, 'walking'), 'chasing');
+  assert.equal(resolveState(fox, 'floatingTravel'), 'chasing');
+  assert.equal(resolveState(fox, 'lounging'), 'sleeping');
+  assert.equal(resolveState({ states: { idle: 0, walking: 14 } }, 'walking'), 'walking');
+  assert.equal(resolveState({ states: { idle: 0 } }, 'walking'), 'idle');
+});
 
 test('isNightTime handles windows that wrap past midnight', () => {
   const at = (h, m = 0) => new Date(2026, 8, 14, h, m);
