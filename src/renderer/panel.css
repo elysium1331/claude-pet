@@ -13,13 +13,13 @@ body {
 #card {
   --origin: 50% 100%;
   box-sizing: border-box;
-  width: 212px;
-  padding: 10px 12px 9px;
+  width: 244px;
+  padding: 12px 14px 10px;
   border-radius: 14px;
   background: var(--card);
   border: 1px solid var(--edge);
   color: var(--ink);
-  font-size: 12px;
+  font-size: 14px;
   cursor: default;
   opacity: 0;
   clip-path: circle(12px at var(--origin));
@@ -39,8 +39,8 @@ body.open #card {
 
 .row {
   display: grid;
-  grid-template-columns: 26px 1fr;
-  column-gap: 8px;
+  grid-template-columns: 30px 1fr;
+  column-gap: 10px;
   align-items: center;
   opacity: 0;
   transform: translateY(4px);
@@ -61,8 +61,8 @@ body.open .row:nth-child(2) { transition-delay: 0.16s; }
 body.open .row:nth-child(3) { transition-delay: 0.22s; }
 
 .ring {
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   transform: rotate(-90deg);
 }
 
@@ -127,7 +127,7 @@ body.open .bar i {
 }
 
 .when {
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -140,7 +140,7 @@ body.open .bar i {
   margin-top: 9px;
   padding-top: 6px;
   border-top: 1px solid var(--edge);
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 
