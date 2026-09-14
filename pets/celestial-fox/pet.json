@@ -21,7 +21,10 @@
     "statsSideProperty": "statsSide",
     "hoveredProperty": "hovered",
     "lookXProperty": "lookX",
-    "lookYProperty": "lookY"
+    "lookYProperty": "lookY",
+    "heldProperty": "held",
+    "dragLeanProperty": "dragLean",
+    "happinessProperty": "happiness"
   },
   "states": {
     "idle": 0,
@@ -35,7 +38,9 @@
     "lounging": 8,
     "workingBusy": 9,
     "confused": 10,
-    "disconnected": 11
+    "disconnected": 11,
+    "chasing": 12,
+    "sitting": 13
   },
   "reactions": {
     "wake": "perkUp",
@@ -48,7 +53,16 @@
     "alert": "alertRing",
     "approve": "approve",
     "taskDone": "taskDone",
-    "error": "error"
+    "error": "error",
+    "petted": "petted",
+    "tickled": "tickled",
+    "eat": "eat",
+    "catch": "catchOrb",
+    "land": "land",
+    "bonk": "bonk",
+    "dizzy": "dizzy",
+    "tricks": ["trickSpin", "trickFlip"],
+    "levelUp": "levelUp"
   },
   "timings": {
     "disappearMs": 850,
@@ -56,17 +70,20 @@
     "statsMergeMs": 400
   },
   "fidgets": [
-    { "trigger": "lookAround", "ms": 3000, "states": ["idle", "lounging"] },
+    { "trigger": "lookAround", "ms": 3000, "states": ["idle", "lounging", "sitting"] },
     { "trigger": "stretch", "ms": 3000 },
-    { "trigger": "yawn", "ms": 2500, "states": ["idle", "lounging"] },
+    { "trigger": "yawn", "ms": 2500, "states": ["idle", "lounging", "sitting"] },
     { "trigger": "orbPlay", "ms": 3500 },
     { "trigger": "tailChase", "ms": 3000 },
-    { "trigger": "scratchEar", "ms": 2000, "states": ["idle", "lounging"] },
-    { "trigger": "sneeze", "ms": 1500 }
+    { "trigger": "scratchEar", "ms": 2000, "states": ["idle", "lounging", "sitting"] },
+    { "trigger": "sneeze", "ms": 1500, "states": ["idle", "sitting"] }
   ],
   "bodyInsets": { "top": 0.045, "right": 0.123, "bottom": 0.078, "left": 0.123 },
   "stateInsets": {
-    "lounging": { "top": 0.662, "right": 0.195, "bottom": 0.017, "left": 0.018 }
+    "lounging": { "top": 0.662, "right": 0.195, "bottom": 0.017, "left": 0.018 },
+    "sitting": { "top": 0.552, "right": 0.184, "bottom": 0.012, "left": 0.018 },
+    "held": { "top": 0.028, "right": 0.121, "bottom": 0.05, "left": 0.121 },
+    "chasing": { "top": 0.053, "right": 0.123, "bottom": 0.06, "left": 0.123 }
   },
   "size": { "width": 560, "height": 600 }
 }

@@ -1,6 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, shouldGreet } = require('../src/main/behavior');
+const {
+  insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, shouldGreet, restingPose,
+} = require('../src/main/behavior');
+
+test('restingPose sits on the taskbar instead of floating, when the pet can sit', () => {
+  const sitter = { states: { idle: 0, sitting: 13 } };
+  assert.equal(restingPose(sitter, 'idle', true), 'sitting');
+  assert.equal(restingPose(sitter, 'idle', false), 'idle');
+  assert.equal(restingPose(sitter, 'lowUsage', true), 'lowUsage');
+  assert.equal(restingPose({ states: { idle: 0 } }, 'idle', true), 'idle');
+});
 
 const pet = {
   bodyInsets: { top: 0.045, right: 0.118, bottom: 0.078, left: 0.118 },

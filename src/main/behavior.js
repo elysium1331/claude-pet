@@ -57,7 +57,13 @@ function shouldGreet(lastGreetDate, now = new Date()) {
   return lastGreetDate !== localDateKey(now);
 }
 
+// On the taskbar with nothing going on, a pet that can sit sits instead of floating.
+function restingPose(pet, state, grounded) {
+  return state === 'idle' && grounded && 'sitting' in (pet.states || {}) ? 'sitting' : state;
+}
+
 module.exports = {
+  restingPose,
   insetsForState,
   wakeReaction,
   fidgetsFor,

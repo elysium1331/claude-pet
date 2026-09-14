@@ -12,11 +12,13 @@ const { isClaudeRunning } = require('./claude-process');
 const { levelFor, colorForPercent, choosePetState, formatReset, formatCountdown, formatAgo } = require('./usage-parse');
 const { ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets } = require('./placement');
 const {
-  insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey, shouldGreet,
+  restingPose, insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey, shouldGreet,
 } = require('./behavior');
 const { ClaudeActivity } = require('./claude-activity');
 const { startHookServer } = require('./hook-server');
 const hooksInstaller = require('./hooks-installer');
+const { classifyClicks, StrokeDetector, edgeBump } = require('./gestures');
+const petLife = require('./pet-life');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SERVED_DIRS = ['src/renderer', 'node_modules/@rive-app/webgl2', 'pets'].map((d) => path.join(ROOT, d) + path.sep);
@@ -28,6 +30,10 @@ const CLAUDE_CHECK_MS = 15_000;
 const TICK_MS = 1000;
 const LOOK_MS = 50;
 const VIEW_REFRESH_MS = 30_000;
+const CLICK_GAP_MS = 280; // clicks closer together than this count as one burst
+const CHASE_MS = 8000;
+const CHASE_STEP_PX = 14;
+const BONK_COOLDOWN_MS = 1500;
 
 const args = parseArgs(process.argv);
 
@@ -48,6 +54,7 @@ let tray = null;
 let config = null;
 let pet = null;
 let usage = null;
+let activity = null;
 let claudeRunning = true;
 
 let petPos = null; // top-left of the pet window
@@ -55,6 +62,7 @@ let grounded = false;
 let facing = 1; // 1 = right, -1 = left
 let drag = null;
 let glide = null;
+let chase = null;
 
 let statsOpen = false;
 let panelSize = { width: 212, height: 180 };
@@ -66,8 +74,16 @@ let nextFidgetAt = 0;
 let lastViewPush = 0;
 let lastLook = { x: 0, y: 0 };
 let lastGoodUsage = null;
-let activity = null;
 let quitting = false;
+
+let appTimers = [];
+let life = null;
+let lifeSaveTimer = null;
+let clickCount = 0;
+let clickTimer = null;
+let nextTrick = 0;
+const rubDetector = new StrokeDetector({ minTravel: 6, reversals: 4, windowMs: 1200, cooldownMs: 4000 });
+const shakeDetector = new StrokeDetector({ minTravel: 40, reversals: 5, windowMs: 1500 });
 
 function parseArgs(argv) {
   const get = (name) => argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -99,7 +115,7 @@ function loadPet(name) {
   return {
     ...manifest,
     bodyInsets: manifest.bodyInsets || ZERO_INSETS,
-    timings: { disappearMs: 0, statsMergeMs: 0, ...manifest.timings },
+    timings: { disappearMs: 0, goodbyeMs: 0, statsMergeMs: 0, ...manifest.timings },
     dir,
     url: `app://bundle/pets/${encodeURIComponent(name)}/${manifest.file}`,
   };
@@ -114,10 +130,45 @@ function serveAppFiles() {
   });
 }
 
+// ---------- happiness and experience ----------
+
+function lifePath() {
+  return path.join(userDataDir(), 'pet-life.json');
+}
+
+function loadLife() {
+  try {
+    return { ...petLife.newLife(), ...JSON.parse(fs.readFileSync(lifePath(), 'utf8')) };
+  } catch {
+    return petLife.newLife();
+  }
+}
+
+function scheduleLifeSave() {
+  if (args.snapshot) return;
+  clearTimeout(lifeSaveTimer);
+  lifeSaveTimer = setTimeout(() => {
+    try {
+      fs.writeFileSync(lifePath(), JSON.stringify(life));
+    } catch (err) {
+      console.warn('[life] could not save:', err.message);
+    }
+  }, 2000);
+}
+
+function rewardPet(kind) {
+  const result = petLife.reward(life, kind);
+  life = result.life;
+  scheduleLifeSave();
+  pushView();
+  if (result.leveledUp) setTimeout(() => playEvent('levelUp'), 2800); // after the reaction that earned it
+  return result.rewarded;
+}
+
 // ---------- view model sent to both windows ----------
 
 function displayState() {
-  return args.petState || petState;
+  return args.petState || (chase ? 'chasing' : petState);
 }
 
 function pickScoped(u) {
@@ -151,6 +202,7 @@ function buildView() {
       model: colorForPercent(orbs.model),
     },
     flipped: isFlipped(),
+    happiness: Math.round(life.happiness),
     status,
     message,
     updatedAgo: formatAgo(fetchedAt, now),
@@ -160,7 +212,7 @@ function buildView() {
 }
 
 function pushView() {
-  if (!usage) return;
+  if (!usage || !life) return;
   lastViewPush = Date.now();
   const view = buildView();
   for (const win of [petWin, panelWin]) {
@@ -176,9 +228,14 @@ function sendReaction(name) {
   if (name && petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:reaction', name);
 }
 
+function sendHeld(held, lean = 0) {
+  if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:held', { held, lean });
+}
+
 // A meaningful reaction (not a random fidget): play it if the pet is awake and visible, and hold off fidgets.
 function playEvent(eventName) {
-  const trigger = pet.reactions?.[eventName];
+  let trigger = pet.reactions?.[eventName];
+  if (Array.isArray(trigger)) trigger = trigger[nextTrick++ % trigger.length];
   if (!trigger || !petWin?.isVisible() || displayState() === 'sleeping') return false;
   sendReaction(trigger);
   nextFidgetAt = Math.max(nextFidgetAt, Date.now() + 10_000);
@@ -198,6 +255,7 @@ function handleHookEvent(event, payload) {
   if (args.debugHooks) console.log('[hooks]', event, payload.session_id || '', '->', reactions.join(',') || '-', '| now', activity.summary() || 'quiet');
   lastInteraction = Date.now(); // don't flop down to lounge right after Claude finishes
   reactions.forEach(playEvent);
+  if (reactions.includes('taskDone')) rewardPet('taskDone');
   tick();
 }
 
@@ -254,7 +312,7 @@ function computePetState(now = Date.now()) {
     warnAt: config.warnAtPercent,
     needsLogin: usage.snapshot.status === 'needs-login',
     userAwayMs: powerMonitor.getSystemIdleTime() * 1000,
-    petIdleMs: statsOpen || drag ? 0 : now - lastInteraction,
+    petIdleMs: statsOpen || drag || chase ? 0 : now - lastInteraction,
     loungeAfterMs: config.loungeAfterMinutes * 60_000,
     awayAfterMs: config.sleepWhenAwayMinutes * 60_000,
     activity: activity.summary(),
@@ -263,7 +321,7 @@ function computePetState(now = Date.now()) {
 
 function maybeFidget(now) {
   if (now < nextFidgetAt) return;
-  const options = config.fidgets && !statsOpen && !drag && petWin.isVisible() ? fidgetsFor(pet, displayState()) : [];
+  const options = config.fidgets && !statsOpen && !drag && !chase && petWin.isVisible() ? fidgetsFor(pet, displayState()) : [];
   if (!options.length) {
     nextFidgetAt = now + 5000;
     return;
@@ -274,21 +332,108 @@ function maybeFidget(now) {
 }
 
 function tick() {
-  if (!usage || !petWin || quitting) return;
+  if (!usage || !windowAlive(petWin) || !life || quitting) return;
   const now = Date.now();
-  const next = computePetState(now);
 
+  if (now - life.updatedAt > 60_000) {
+    const before = Math.round(life.happiness);
+    life = petLife.decay(life, now);
+    scheduleLifeSave();
+    if (Math.round(life.happiness) !== before) pushView();
+  }
+
+  const next = restingPose(pet, computePetState(now), grounded);
   if (next !== petState) {
     sendReaction(wakeReaction(pet, petState, next));
     petState = next;
     pushView();
-    // Poses occupy different parts of the pet box, so settle into the new pose's bounds.
-    if (displayState() === 'lounging' && config.loungeOnTaskbar) glideToGround();
-    else settlePet();
+    if (!chase && !drag) {
+      // Poses occupy different parts of the pet box, so settle into the new pose's bounds.
+      if (displayState() === 'lounging' && config.loungeOnTaskbar) glideToGround();
+      else settlePet();
+    }
   } else if (now - lastViewPush > VIEW_REFRESH_MS) {
     pushView(); // keeps reset countdowns fresh
   }
   maybeFidget(now);
+}
+
+// ---------- playing ----------
+
+function registerClick() {
+  markInteraction();
+  clickCount += 1;
+  clearTimeout(clickTimer);
+  clickTimer = setTimeout(() => {
+    const gesture = classifyClicks(clickCount);
+    clickCount = 0;
+    if (gesture === 'stats') {
+      if (statsOpen) closeStats();
+      else openStats();
+    } else if (gesture === 'trick') {
+      closeStats();
+      doTrick();
+    } else if (gesture === 'tickle') {
+      closeStats();
+      if (playEvent('tickled')) rewardPet('tickled');
+    }
+  }, CLICK_GAP_MS);
+}
+
+function doTrick() {
+  if (playEvent('tricks')) rewardPet('trick');
+}
+
+function feedPet() {
+  markInteraction();
+  if (playEvent('eat')) rewardPet('fed');
+}
+
+function startChase() {
+  if (chase || !petWin.isVisible() || displayState() === 'sleeping') return;
+  closeStats();
+  cancelGlide();
+  markInteraction();
+  chase = { until: Date.now() + CHASE_MS, timer: null };
+  pushView();
+  chase.timer = setInterval(chaseStep, 30);
+}
+
+function chaseStep() {
+  if (quitting || !windowAlive(petWin)) return;
+  const cursor = screen.getCursorScreenPoint();
+  const center = petCenter();
+  const dx = cursor.x - center.x;
+  const dy = cursor.y - center.y;
+  const distance = Math.hypot(dx, dy);
+
+  if (distance < 30) {
+    endChase(true);
+    return;
+  }
+  if (Date.now() > chase.until) {
+    endChase(false);
+    return;
+  }
+  const nextFacing = dx >= 0 ? 1 : -1;
+  if (Math.abs(dx) > 20 && nextFacing !== facing) {
+    facing = nextFacing;
+    pushView();
+  }
+  const step = Math.min(CHASE_STEP_PX, distance);
+  movePet({ x: Math.round(petPos.x + (dx / distance) * step), y: Math.round(petPos.y + (dy / distance) * step) }, workAreaAt(cursor));
+}
+
+function endChase(caught) {
+  if (!chase) return;
+  clearInterval(chase.timer);
+  chase = null;
+  markInteraction();
+  if (caught) playEvent('catch');
+  rewardPet('played');
+  pushView();
+  updateFacing();
+  settlePet();
 }
 
 // ---------- pet window placement ----------
@@ -306,7 +451,7 @@ function isFlipped() {
 }
 
 function currentInsets() {
-  return mirrorInsets(insetsForState(pet, displayState()), isFlipped());
+  return mirrorInsets(insetsForState(pet, drag ? 'held' : displayState()), isFlipped());
 }
 
 function placementOptions(workArea) {
@@ -314,6 +459,7 @@ function placementOptions(workArea) {
 }
 
 function setPetBounds(pos) {
+  if (!windowAlive(petWin)) return;
   petPos = { x: pos.x, y: pos.y };
   petWin.setBounds({ ...petPos, ...PET_SIZE }); // setBounds keeps transparent windows from growing on scaled displays
   if (statsOpen) placePanel();
@@ -323,6 +469,7 @@ function movePet(pos, workArea = workAreaAt(petCenter(pos))) {
   const placed = clampPet(pos, placementOptions(workArea));
   grounded = placed.grounded;
   setPetBounds(placed);
+  return placed;
 }
 
 function savePetPosition() {
@@ -377,14 +524,14 @@ function glideTo(target, duration, onDone) {
 
 // Slide (briefly) into the current pose's on-screen bounds.
 function settlePet() {
-  if (drag) return;
+  if (drag || chase) return;
   const placed = clampPet(petPos, placementOptions(workAreaAt(petCenter())));
   grounded = placed.grounded;
   glideTo(placed, 260, savePetPosition);
 }
 
 function glideToGround() {
-  if (drag) return;
+  if (drag || chase) return;
   const target = clampPet({ x: petPos.x, y: Number.MAX_SAFE_INTEGER }, placementOptions(workAreaAt(petCenter())));
   const distance = Math.hypot(target.x - petPos.x, target.y - petPos.y);
   closeStats();
@@ -470,7 +617,7 @@ function clearStatsTimers() {
 
 // Opening: the orbs fly together and merge first, then the panel grows out of that bubble.
 function openStats() {
-  if (statsOpen || !petWin.isVisible()) return;
+  if (statsOpen || !petWin.isVisible() || chase) return;
   statsOpen = true;
   cancelGlide();
   markInteraction();
@@ -513,6 +660,7 @@ function showPet() {
 
 function hidePet() {
   closeStats();
+  if (chase) endChase(false);
   sendReaction(pet.reactions?.disappear);
   setTimeout(() => {
     petWin.hide();
@@ -540,9 +688,26 @@ function quitWithGoodbye() {
   }, waveMs);
 }
 
+function windowAlive(win) {
+  return !!win && !win.isDestroyed();
+}
+
+// Stop every timer before windows are destroyed, so nothing touches a closed window during quit.
+function stopTimers() {
+  quitting = true;
+  appTimers.forEach(clearInterval);
+  appTimers = [];
+  clearTimeout(clickTimer);
+  clearStatsTimers();
+  cancelGlide();
+  if (chase) clearInterval(chase.timer);
+  chase = null;
+  usage?.stop();
+}
+
 // Eyes follow the mouse.
 function trackCursor() {
-  if (!petWin?.isVisible() || drag) return;
+  if (quitting || !windowAlive(petWin) || !petWin.isVisible() || drag || chase) return;
   const next = lookFromCursor({ cursor: screen.getCursorScreenPoint(), center: petCenter(), flipped: isFlipped() });
   if (Math.abs(next.x - lastLook.x) < 0.02 && Math.abs(next.y - lastLook.y) < 0.02) return;
   lastLook = next;
@@ -561,10 +726,27 @@ function trayIcon() {
     .resize({ width: 32, height: 32, quality: 'best' });
 }
 
+function lifeSummary() {
+  const next = petLife.LEVEL_XP[life.level + 1];
+  const progress = next ? `${life.xp}/${next} XP` : `${life.xp} XP, max level`;
+  return `Happiness ${Math.round(life.happiness)} · Level ${life.level} (${progress})`;
+}
+
 function buildMenu() {
   const hooks = hooksStatus();
+  const awake = petWin?.isVisible() && displayState() !== 'sleeping';
   return Menu.buildFromTemplate([
     { label: 'Show usage stats', click: showStatsFromMenu },
+    {
+      label: 'Play',
+      submenu: [
+        { label: lifeSummary(), enabled: false },
+        { type: 'separator' },
+        { label: 'Feed a spark', enabled: awake, click: feedPet },
+        { label: 'Chase my cursor', enabled: awake, click: startChase },
+        { label: 'Do a trick', enabled: awake, click: doTrick },
+      ],
+    },
     { label: petWin?.isVisible() ? 'Hide pet' : 'Show pet', accelerator: config.hideHotkey, registerAccelerator: false, click: toggleVisible },
     { label: 'Refresh usage now', click: () => usage.refreshNow() },
     { label: 'Open Claude usage page', click: () => shell.openExternal(USAGE_PAGE) },
@@ -588,6 +770,7 @@ function refreshTrayMenu() {
 function createTray() {
   tray = new Tray(trayIcon());
   tray.on('click', toggleVisible);
+  tray.on('right-click', refreshTrayMenu); // keep the happiness/level line current
   refreshTrayMenu();
 }
 
@@ -611,7 +794,9 @@ async function detectClaude() {
 }
 
 async function watchClaude() {
+  if (quitting) return;
   const running = await detectClaude();
+  if (quitting) return;
   if (running !== claudeRunning) {
     claudeRunning = running;
     usage.setIntervalMinutes(running ? config.pollMinutes : config.idlePollMinutes);
@@ -636,30 +821,55 @@ function registerIpc() {
   ipcMain.on('pet:drag-start', () => {
     cancelGlide();
     closeStats();
+    if (chase) endChase(false);
     const cursor = screen.getCursorScreenPoint();
-    drag = { dx: cursor.x - petPos.x, dy: cursor.y - petPos.y };
+    drag = { dx: cursor.x - petPos.x, dy: cursor.y - petPos.y, lastX: cursor.x, lean: 0, lastBonkAt: 0 };
+    shakeDetector.reset();
     markInteraction();
+    sendHeld(true);
   });
 
   ipcMain.on('pet:drag-move', () => {
     if (!drag) return;
     const cursor = screen.getCursorScreenPoint();
-    movePet({ x: cursor.x - drag.dx, y: cursor.y - drag.dy }, workAreaAt(cursor));
+    const now = Date.now();
+    const desired = { x: cursor.x - drag.dx, y: cursor.y - drag.dy };
+    const placed = movePet(desired, workAreaAt(cursor));
+
+    // lean into the drag, and notice being pushed into an edge or shaken
+    drag.lean = drag.lean * 0.7 + Math.max(-1, Math.min(1, (cursor.x - drag.lastX) / 25)) * 0.3;
+    drag.lastX = cursor.x;
+    sendHeld(true, Math.round(drag.lean * 100) / 100);
+    if (edgeBump(desired, placed) && now - drag.lastBonkAt > BONK_COOLDOWN_MS) {
+      drag.lastBonkAt = now;
+      playEvent('bonk');
+    }
+    if (shakeDetector.add(cursor.x, now)) drag.dizzy = true;
   });
 
   ipcMain.on('pet:drag-end', () => {
     if (!drag) return;
+    const { dizzy } = drag;
     drag = null;
+    sendHeld(false);
     markInteraction();
+    if (dizzy) playEvent('dizzy');
+    else if (grounded) playEvent('land');
     updateFacing();
-    savePetPosition();
+    settlePet();
+    tick();
   });
 
-  ipcMain.on('pet:click', () => {
-    markInteraction();
-    if (statsOpen) closeStats();
-    else openStats();
+  ipcMain.on('pet:click', registerClick);
+
+  ipcMain.on('pet:hover-move', (_event, x) => {
+    if (drag || chase || !Number.isFinite(x)) return;
+    if (rubDetector.add(x, Date.now())) {
+      markInteraction();
+      if (playEvent('petted')) rewardPet('petted');
+    }
   });
+
   ipcMain.on('pet:close-stats', closeStats);
   ipcMain.on('pet:context-menu', () => {
     closeStats();
@@ -697,6 +907,7 @@ function scheduleSnapshot() {
 app.whenReady().then(async () => {
   config = loadConfig(userDataDir());
   pet = loadPet(config.pet);
+  life = loadLife();
   serveAppFiles();
   registerIpc();
 
@@ -733,11 +944,20 @@ app.whenReady().then(async () => {
   nextFidgetAt = Date.now() + randomBetween(15_000, 30_000);
   usage.start();
   setTimeout(watchClaude, CLAUDE_CHECK_MS);
-  setInterval(tick, TICK_MS);
-  setInterval(trackCursor, LOOK_MS);
+  appTimers.push(setInterval(tick, TICK_MS), setInterval(trackCursor, LOOK_MS));
   nativeTheme.on('updated', pushView);
   if (args.snapshot) scheduleSnapshot();
 });
 
-app.on('second-instance', () => petWin && showPet());
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('before-quit', stopTimers);
+app.on('second-instance', () => windowAlive(petWin) && showPet());
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  if (life && !args.snapshot) {
+    try {
+      fs.writeFileSync(lifePath(), JSON.stringify(life));
+    } catch {
+      // best effort
+    }
+  }
+});

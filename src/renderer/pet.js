@@ -11,6 +11,8 @@ let riveReady = false;
 let lastView = null;
 let stats = { open: false, side: 'above' };
 let hovered = false;
+let held = { held: false, lean: 0 };
+let lastHoverSent = 0;
 const pendingReactions = [];
 const look = { x: 0, y: 0, targetX: 0, targetY: 0 };
 
@@ -97,6 +99,9 @@ function applyPet() {
   setColor(vm, colors.model, lastView.orbColors.model);
   setBoolean(vm, binding.lightBackdropProperty, lastView.lightBackdrop);
   setBoolean(vm, binding.hoveredProperty, hovered);
+  setNumber(vm, binding.happinessProperty, lastView.happiness ?? 50);
+  setBoolean(vm, binding.heldProperty, held.held);
+  setNumber(vm, binding.dragLeanProperty, held.lean);
   setNumber(vm, binding.statsSideProperty, stats.side === 'below' ? 1 : 0); // side must be set before open
   setBoolean(vm, binding.statsOpenProperty, stats.open);
 }
@@ -131,6 +136,11 @@ window.petHost.onStats((next) => {
 
 window.petHost.onReaction(playReaction);
 
+window.petHost.onHeld((next) => {
+  held = next;
+  applyPet();
+});
+
 window.petHost.onLook(({ x, y }) => {
   look.targetX = x;
   look.targetY = y;
@@ -161,7 +171,14 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 
 canvas.addEventListener('pointermove', (e) => {
-  if (!dragging) return;
+  if (!dragging) {
+    // rubbing the cursor back and forth pets the pet; main process recognizes the gesture
+    if (e.timeStamp - lastHoverSent > 30) {
+      lastHoverSent = e.timeStamp;
+      window.petHost.hoverMove(e.screenX);
+    }
+    return;
+  }
   if (!moved && Math.hypot(e.screenX - downAt.x, e.screenY - downAt.y) > 4) {
     moved = true;
     canvas.classList.add('dragging');
@@ -175,7 +192,7 @@ canvas.addEventListener('pointerup', () => {
   dragging = false;
   canvas.classList.remove('dragging');
   if (moved) window.petHost.dragEnd();
-  else window.petHost.click(); // single click opens/closes the stats
+  else window.petHost.click(); // main process counts clicks: 1 = stats, 2 = trick, 3+ = tickle
 });
 
 document.addEventListener('keydown', (e) => {

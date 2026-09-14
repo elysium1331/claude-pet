@@ -14,6 +14,14 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 - Left alone for a few minutes, it drifts down to the taskbar and lounges. It sleeps when you're away from the computer or the Claude app isn't running, and checks usage less often while it naps.
 - Gets worried near your limits, sighs and gets tired when one is hit, and celebrates when a limit resets (the orbs drain and refill).
 - Waves hello once a day, looks for a connection if it can't read your usage, and waves goodbye when you quit.
+
+## Playing with it
+
+- **Drag** it around: it dangles and leans, bonks if you push it into a screen edge, gets dizzy if you shake it, and lands when you drop it on the taskbar (where it sits).
+- **Rub** the cursor back and forth over it to pet it.
+- **Double-click** for a trick; **triple-click** to tickle it.
+- Right-click → **Play**: feed it a spark, have it chase your cursor, or ask for a trick. The same menu shows its happiness and level.
+- Playing and finished Claude Code tasks raise its happiness and experience; ignored for hours, it gets a little droopy. Levels unlock growth looks in pets that have them.
 - Tray icon: show/hide, refresh now, open Claude's usage page, launch at startup, settings.
 - `Ctrl+Alt+P` hides or shows it (for windowed games, screen shares, and so on). While hidden it stays silent.
 

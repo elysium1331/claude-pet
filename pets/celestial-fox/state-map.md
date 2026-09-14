@@ -1,8 +1,8 @@
-# Celestial Fox — revision 4, Batch 2
+# Celestial Fox — revision 4, Batch 3
 
 **Runtime file:** `celestial-fox.riv` · **Artboard:** `CelestialFox` · **State machine:** `PetStateMachine` · **View model:** `PetController` (default instance).
 
-One transparent **560 × 600** artboard. Batches 1 and 2 are implemented. Batches 3–4 are not included. All existing named IDs, 32 prior animation definitions, and 81 prior pet-state transitions are preserved. Batch 2 adds Claude activity states and usage-event reactions.
+One transparent **560 × 600** artboard. Batches 1–3 are implemented. Batch 4 is not included. All prior named IDs and animation definitions are preserved. Batch 3 adds cursor chasing, ground sitting, dragging, subtle happiness controls and ten play reactions.
 
 ## Persistent states
 
@@ -22,6 +22,8 @@ Set the Number property `state` to an integer. The selected state remains active
 | 9 | `working_busy` | 2.5 s, loop | Alternating fin typing on a small glowing work pad, focused nod and key pulses |
 | 10 | `confused` | 3 s, loop | Puzzled head sway, asymmetric brows, searching eyes and question/swirl motes |
 | 11 | `disconnected` | 4 s, loop | Looking around for a connection, broken-link mote, cloudy grey meters in a closer orbit |
+| 12 | `chasing` | 2 s, loop | Floating pursuit with paddling fins and swishing tail; faces the `facing` direction. The host moves the canvas toward the cursor |
+| 13 | `sitting` | 5 s, loop | Upright ground pose with a coiled celestial tail, breathing, content eyes, slow blink and ear flick |
 
 States 4 and 5 remain the original one-shot-and-hold states to retain compatibility. Re-selecting an already selected state does not restart its timeline. To replay 4 or 5, briefly select another state, then select it again. All states can transition to each other, with an internal settling stage when entering lounging. New activity states use 240 ms blends; grounded transitions can use 360 ms. Existing blends remain 180 ms (320 ms entering sleeping/tired). Lounging uses a short staged settling motion: meters move aside before the body lowers, with 180–360 ms blends. When waking, the head rises before the meters return to the floating orbit.
 
@@ -51,15 +53,26 @@ Durations below are authored timeline lengths. The automatic blend back can add 
 | `limitHit` | 2 s | Yes | Selected state; deflated sigh while the highest-usage orb fills to full temporarily. App selects `state = 7` afterward |
 | `greet` | 2 s | No; fin and head | Selected state; friendly repeated wave beside the head |
 | `goodbye` | 1.5 s | No; fin and head | Selected state; smaller wave. App fires `disappear` afterward |
+| `petted` | 2 s | Yes; gentle wiggle | Selected state or held pose; happy squint, warm sparkles and tail wiggle |
+| `tickled` | 1.5 s | Yes | Selected state or held pose; giggly squirm and quick head/body wiggles |
+| `eat` | 2 s | No; expression and fin | Selected state or held pose; a glowing spark approaches the mouth, then happy chewing and a small glow pulse |
+| `catchOrb` | 1.5 s | No; head and fin | Selected state or held pose; catches an incoming decorative spark. Usage meters remain intact |
+| `land` | 0.8 s | Yes | Drops to y=590, squashes and settles, then blends back to the selected state or held pose |
+| `bonk` | 1 s | Yes; brief recoil | Selected state or held pose; small sideways recoil, dizzy stars and a shake |
+| `dizzy` | 2 s | Yes; small sway | Selected state or held pose; wobble and stars after shaking |
+| `trickSpin` | 1.5 s | Yes | Selected state or held pose; a compact loop-de-loop above the meter orbit |
+| `trickFlip` | 1.5 s | Yes | Selected state or held pose; a compact somersault above the meter orbit |
+| `levelUp` | 3 s | Yes | Selected state or held pose; luminous burst, proud lift, spread fins and happy eyes. Does not change growth |
+
 
 
 Visibility has its own animation layer and can run alongside fidgets. `disappear` intentionally hides the whole pet, including meters, as required by its fully invisible endpoint. If `statsOpen` remains true, `appear` restores the pet with the meters still hidden for the stats panel. `perkUp` does not cancel a latched `disappear`; call `appear` to unhide.
 
-## All view-model properties (31)
+## All view-model properties (45)
 
 | Property | Type | Range | Default | Effect |
 |---|---|---|---|---|
-| `state` | Number | Integer 0–11 | `0` | Persistent state selector |
+| `state` | Number | Integer 0–13 | `0` | Persistent state selector |
 | `session` | Number | 0–100 | `0` | One-dot usage meter |
 | `weekly` | Number | 0–100 | `0` | Two-dot usage meter |
 | `fable` | Number | 0–100 | `0` | Three-dot usage meter |
@@ -90,6 +103,20 @@ Visibility has its own animation layer and can run alongside fidgets. `disappear
 | `limitHit` | Trigger | Event | Not fired | Sigh/full-meter reaction; preserves usage data and state |
 | `greet` | Trigger | Event | Not fired | Friendly wave |
 | `goodbye` | Trigger | Event | Not fired | Small wave; does not hide by itself |
+| `held` | Boolean | false / true | `false` | Temporarily overrides the base pose with dangling fins/tail and surprised eyes; preserves `state` |
+| `dragLean` | Number | −1 to 1 | `0` | While held, leans opposite the drag direction, up to about 9°; visually clamped |
+| `facing` | Number | `−1` or `1` | `1` | Facing direction of state 12: left or right; leaves existing states unchanged |
+| `happiness` | Number | 0–100 | `50` | Subtle eye/brow and warm-heart changes in resting states 0, 8 and 13. Default 50 preserves the existing appearance |
+| `petted` | Trigger | Event | Not fired | Purring wiggle and warm sparkles |
+| `tickled` | Trigger | Event | Not fired | Giggly squirm |
+| `eat` | Trigger | Event | Not fired | Spark gobble, chew and glow pulse |
+| `catchOrb` | Trigger | Event | Not fired | Catch a decorative spark |
+| `land` | Trigger | Event | Not fired | Ground squash and settle |
+| `bonk` | Trigger | Event | Not fired | Recoil and dizzy stars |
+| `dizzy` | Trigger | Event | Not fired | Wobble and stars |
+| `trickSpin` | Trigger | Event | Not fired | Loop-de-loop |
+| `trickFlip` | Trigger | Event | Not fired | Somersault |
+| `levelUp` | Trigger | Event | Not fired | Celebration burst and proud pose |
 
 Supply usage data and colors from the app; the file makes no network requests. Rings fill clockwise from the top. `0` is empty/dim and `100` is full. Decimal percentages work, and visual fill clamps to 0–100. **Built-in calm/amber/red banding is disabled.** Each Color property independently drives its meter's fill ring and ring glow, plus its soft halo/core illumination. Changing a usage Number changes the fill amount, not the ring color. The app supplies its own blue → yellow → orange → red interpolation and timing; color updates are immediate in the file. Set opaque RGB colors for normal use; color alpha also modulates the colored artwork. Glow has an additional fixed soft falloff. The 1/2/3-dot marks remain opaque white (`#FFFFFF`), upright, and independent of the supplied color. At 140 × 150, each meter shell is approximately 20 px across and the fill ring approximately 2.2 px thick.
 
@@ -107,10 +134,22 @@ Meeting points, in artboard pixels:
 
 | Pose | Above head, `statsSide = 0` | Below tail, `statsSide = 1` |
 |---|---|---|
-| Floating states 0–7 and 9–11 | `(280, 45)` | `(280, 580)` |
+| Floating states 0–7 and 9–12 | `(280, 45)` | `(280, 580)` |
 | Lounging, state 8 | `(310, 365)` | `(100, 580)` |
+| Sitting, state 13 | `(320, 305)` | `(320, 580)` |
+| Held, any selected state | `(280, 45)` | `(280, 580)` |
 
 The named transform `stats_meeting_point` is exported for hosts that need its world position. During a state transition, let the panel follow the intended destination pose rather than assuming a constant anchor.
+
+## Dragging, chasing and play
+
+`held = true` temporarily takes priority over the selected base state and moves into a floating dangling pose with its own 3 s swaying loop. Reactions, stats controls, hover and gaze remain available. `held = false` blends back to the app’s latest selected state, even if `state` changed during the drag. No new Batch 3 trigger writes `state`, `held`, usage, colors or happiness.
+
+Set `dragLean` from drag velocity/direction, with screen-right positive. The character leans in the opposite direction. Facing applies to chasing; other poses retain their established orientation. The host owns cursor tracking, canvas position, edge detection, click counts and reaction scheduling. The file does not move an OS window or calculate cursor pursuit. Chasing is the floating alternative requested in the specification and does not touch the ground.
+
+On release, set `held = false`, select the desired persistent destination, and fire `land`. Landing briefly uses a compact contact pose on y=590, with meters staged to the left, then returns to the selected pose. Choose state 13 before landing if the pet should remain on the ground. The landing contact is around x=350 to keep the face away from the readable meters. Full-body landing/tricks add a 400 ms return blend to their authored durations; other reactions add up to 180 ms.
+
+Tricks tuck the character into a smaller pose above the meters and return to the live destination pose. Internal full-turn angle normalization resets an equivalent 360° angle to 0° with no visible pose change. `catchOrb` uses a separate decorative spark; it never consumes a usage meter. `levelUp` is a reaction only; Batch 4 growth cosmetics are not present yet.
 
 ## Ground and visible bounds
 
@@ -122,9 +161,9 @@ Approximate visible bounds include meters, decoration, and glow with alpha ≥ 1
 |---|---|---|
 | Floating idle | `69 / 27 / 491 / 553` | Batch 1 |
 | Lounging | `10 / 397 / 451 / 598` | Batch 1 |
-| Sitting | — | Scheduled for Batch 3; not implemented |
-| Held | — | Scheduled for Batch 3; not implemented |
-| Chasing | — | Scheduled for Batch 3; not implemented; `tailChase` is a separate reaction |
+| Sitting | `10 / 331 / 457 / 593` | Batch 3 |
+| Held | `68 / 17 / 492 / 570` | Batch 3; neutral dragLean |
+| Chasing | `69 / 32 / 491 / 564` | Batch 3; facing right |
 
 ## Integration with @rive-app/webgl2 2.42.1
 
@@ -154,6 +193,13 @@ const pet = new Rive({
 });
 
 // After onLoad:
+// pet.viewModelInstance.number('state').value = 12; // Host moves the canvas
+// pet.viewModelInstance.number('facing').value = -1;
+// pet.viewModelInstance.boolean('held').value = true;
+// pet.viewModelInstance.number('dragLean').value = 0.7;
+// On release: set held=false, select state=13, then trigger('land').trigger().
+// pet.viewModelInstance.trigger('petted').trigger();
+// pet.viewModelInstance.number('happiness').value = 80;
 // pet.viewModelInstance.number('state').value = 9; // Working with tools
 // pet.viewModelInstance.trigger('taskDone').trigger();
 // pet.viewModelInstance.trigger('usageReset').trigger();
@@ -188,19 +234,23 @@ Runtime caveats:
 
 `celestial-fox-source.zip` contains editable RML artwork, rig, timelines, data bindings, state machine, `rive.yaml`, this map, and verification reports. Compile from that source with **Rive CLI 1.0.3** (or compatible newer tooling): `rive . --once`. The `.riv` is the compiled runtime deliverable. An editor `.rev` file is not included.
 
-Artwork uses only vector paths, gradients, transforms, and a three-bone skinned tail. There are no embedded images, fonts, audio, scripts, or external runtime assets. The runtime file is 141,888 bytes (about 139 KiB), comfortably below the requested approximately 400 KB limit.
+Artwork uses only vector paths, gradients, transforms, and a three-bone skinned tail. There are no embedded images, fonts, audio, scripts, or external runtime assets. The runtime file is 187,458 bytes (about 183 KiB), comfortably below the requested approximately 400 KB limit.
 
-Four contact sheets show every new loop/reaction, with individual cells rendered directly at 560 × 600 or 140 × 150 in WebGL2 2.42.1. White previews enable `lightBackdrop`. All previews use sample usage 42/78/94, with the app explicitly supplying colors `#B7E7FF`, `#FFD08B`, and `#FF997C`; these are preview choices, not automatic thresholds. The GIF pack contains one looping comparison clip per new animation, with dark and white versions side by side. GIF repetition is a preview convenience: reactions remain one-shot in the `.riv`, and `goodbye` does not disappear by itself.
+Four contact sheets show every new loop/reaction plus the held pose, with individual cells rendered directly at 560 × 600 or 140 × 150 in WebGL2 2.42.1. White previews enable `lightBackdrop`. All previews use sample usage 42/78/94, with the app explicitly supplying colors `#B7E7FF`, `#FFD08B`, and `#FF997C`; these are preview choices, not automatic thresholds. The GIF pack contains one looping comparison clip per new animation, with dark and white versions side by side. GIF repetition is a preview convenience: reactions remain one-shot in the `.riv`, and `goodbye` does not disappear by itself.
 
 Verification in **@rive-app/webgl2 2.42.1**:
 
-- **810/810 state, trigger and integration checks**: all 12 states, all 18 triggers fired repeatedly across every state, automatic return, stats, gaze, hover, visibility and sampled meter-to-face clearance across reactions and lounging transitions.
-- **417/417 color checks**: live ring/glow colors and white marks across states 0–10, former usage thresholds and the public high-level Color API. State 11 intentionally renders grey and is covered by the event checks.
-- **37/37 usage-event checks**: actual rendered arc drain/refill, highest-usage selection including ties and decimal values, preserved app data, disconnected grey and restoration of the latest color, new stats anchors and all eight public high-level Trigger APIs.
-- Structural preservation: all prior named IDs, all 32 prior timelines and all 81 prior pet-state transitions. One artboard, one state machine, no embedded assets.
+- **1,368/1,368** — State, reaction, stats, gaze, hover, visibility and face clearance.
+- **489/489** — Live ring/glow colors and white meter marks.
+- **41/41** — Usage events and retained app data.
+- **261/261** — Held, drag lean, facing, happiness, left-facing play and public high-level APIs.
+- **57 prior timelines and 144 prior pet-state transitions preserved**, along with every existing named ID.
 
-Verification reports accompany the source. Face-clearance and visible bounds checks sample authored motion and orbit phases; they are not a proof of every possible simultaneous app-input combination. Fire one body reaction at a time for an uninterrupted gesture. New reactions replace each other's transient meter/badge effects, and an old fidget cancels those effects with the same blend. Visibility remains independent.
+Validation includes actual rendered pixels for meter colors and usage events, all fourteen states, repeated firing of all twenty-eight triggers, held transitions, play reactions while held, stats, gaze, hover, preserved application data and sampled face clearance. Checks sample authored motion and orbit phases; they do not prove every possible combination of simultaneous app input. Use one body reaction at a time when the complete gesture should be seen.
 
-`alertRing` and `limitHit` deliberately leave the persistent state to the app. `goodbye` returns to the selected pose; wait approximately 1.7 s before firing `disappear` if the full wave and return blend should be seen. App input, scheduling, quit timing and fetching usage remain outside the file.
+Source verification confirms preserved prior IDs, animation definitions and pet-state transitions, one artboard, one state machine, and no embedded assets. The source archive rebuilds to the delivered runtime file. Bounds are sampled at neutral dragLean and default happiness; reserve the full artboard for effects and lean.
 
-Batch 2 is complete. Batch 3 requires a separate continuation.
+A 600-frame native benchmark on this machine measured mean animation advance of 0.083 ms and mean rendering of 0.221 ms at 560 × 600. These are local native measurements, not a browser/GPU performance guarantee.
+
+Batch 3 is complete. Batch 4 requires a separate continuation.
+
