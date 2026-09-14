@@ -1,0 +1,26 @@
+# dependencies / builds
+node_modules/
+dist/
+out/
+release/
+
+# logs
+*.log
+npm-debug.log*
+
+# local config, secrets, caches — never commit
+.env
+.env.*
+config.local.json
+*.local.json
+usage-cache.json
+
+# local tooling (contains machine-specific paths)
+.claude/
+
+# credential temp file written during token renewal (never inside the repo, but just in case)
+*.claude-pet.tmp
+
+# OS
+Thumbs.db
+.DS_Store

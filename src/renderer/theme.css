@@ -1,0 +1,21 @@
+:root {
+  color-scheme: dark;
+  --ink: #eef3ff;
+  --muted: #9fb0cc;
+  --card: rgba(15, 19, 34, 0.94);
+  --edge: rgba(160, 190, 255, 0.22);
+  --track: rgba(255, 255, 255, 0.1);
+  --calm: #bcd6ff;
+  --warm: #ffc766;
+  --hot: #ff8f6b;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}

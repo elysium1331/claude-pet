@@ -1,0 +1,16 @@
+#pet {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  cursor: pointer;
+  /* scaling through 0 on the x axis reads as the pet turning around */
+  transition: transform 0.38s cubic-bezier(0.45, 0, 0.2, 1);
+}
+
+body.flipped #pet {
+  transform: scaleX(-1);
+}
+
+#pet.dragging {
+  cursor: grabbing;
+}

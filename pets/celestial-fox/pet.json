@@ -1,0 +1,60 @@
+{
+  "name": "Celestial Fox",
+  "file": "celestial-fox.riv",
+  "artboard": "CelestialFox",
+  "stateMachine": "PetStateMachine",
+  "artFacing": 1,
+  "binding": {
+    "stateProperty": "state",
+    "usageProperties": {
+      "session": "session",
+      "weekly": "weekly",
+      "model": "fable"
+    },
+    "usageColorProperties": {
+      "session": "sessionColor",
+      "weekly": "weeklyColor",
+      "model": "fableColor"
+    },
+    "lightBackdropProperty": "lightBackdrop",
+    "statsOpenProperty": "statsOpen",
+    "statsSideProperty": "statsSide",
+    "hoveredProperty": "hovered",
+    "lookXProperty": "lookX",
+    "lookYProperty": "lookY"
+  },
+  "states": {
+    "idle": 0,
+    "sleeping": 1,
+    "working": 2,
+    "needsAttention": 3,
+    "done": 4,
+    "idea": 5,
+    "lowUsage": 6,
+    "limitReached": 7,
+    "lounging": 8
+  },
+  "reactions": {
+    "wake": "perkUp",
+    "appear": "appear",
+    "disappear": "disappear"
+  },
+  "timings": {
+    "disappearMs": 850,
+    "statsMergeMs": 400
+  },
+  "fidgets": [
+    { "trigger": "lookAround", "ms": 3000, "states": ["idle", "lounging"] },
+    { "trigger": "stretch", "ms": 3000 },
+    { "trigger": "yawn", "ms": 2500, "states": ["idle", "lounging"] },
+    { "trigger": "orbPlay", "ms": 3500 },
+    { "trigger": "tailChase", "ms": 3000 },
+    { "trigger": "scratchEar", "ms": 2000, "states": ["idle", "lounging"] },
+    { "trigger": "sneeze", "ms": 1500 }
+  ],
+  "bodyInsets": { "top": 0.045, "right": 0.118, "bottom": 0.078, "left": 0.118 },
+  "stateInsets": {
+    "lounging": { "top": 0.658, "right": 0.195, "bottom": 0.017, "left": 0.014 }
+  },
+  "size": { "width": 560, "height": 600 }
+}

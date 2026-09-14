@@ -1,0 +1,652 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const {
+  app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, globalShortcut, ipcMain, protocol, net, screen, shell,
+  powerMonitor,
+} = require('electron');
+const { loadConfig, saveConfig, configPath } = require('./config');
+const { defaultCredentialsPath } = require('./claude-auth');
+const { UsageService } = require('./usage-service');
+const { isClaudeRunning } = require('./claude-process');
+const { levelFor, colorForPercent, choosePetState, formatReset, formatCountdown, formatAgo } = require('./usage-parse');
+const { ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets } = require('./placement');
+const { insetsForState, wakeReaction, fidgetsFor, lookFromCursor } = require('./behavior');
+
+const ROOT = path.join(__dirname, '..', '..');
+const SERVED_DIRS = ['src/renderer', 'node_modules/@rive-app/webgl2', 'pets'].map((d) => path.join(ROOT, d) + path.sep);
+const PET_SIZE = { width: 150, height: 160 };
+const PANEL_PAD = 14; // transparent room around the stats card for its shadow (matches panel.css)
+const SNAP_PX = 28;
+const USAGE_PAGE = 'https://claude.ai/settings/usage';
+const CLAUDE_CHECK_MS = 15_000;
+const TICK_MS = 1000;
+const LOOK_MS = 50;
+const VIEW_REFRESH_MS = 30_000;
+
+const args = parseArgs(process.argv);
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+]);
+
+if (args.snapshot) {
+  // Snapshot runs use their own profile so they work while a normal copy of the pet is running.
+  app.setPath('userData', path.join(app.getPath('temp'), 'claude-pet-snapshot'));
+} else if (!app.requestSingleInstanceLock()) {
+  app.quit();
+}
+
+let petWin = null;
+let panelWin = null;
+let tray = null;
+let config = null;
+let pet = null;
+let usage = null;
+let claudeRunning = true;
+
+let petPos = null; // top-left of the pet window
+let grounded = false;
+let facing = 1; // 1 = right, -1 = left
+let drag = null;
+let glide = null;
+
+let statsOpen = false;
+let panelSize = { width: 212, height: 180 };
+let statsTimers = [];
+
+let petState = 'idle';
+let lastInteraction = Date.now();
+let nextFidgetAt = 0;
+let lastViewPush = 0;
+let lastLook = { x: 0, y: 0 };
+let quitting = false;
+
+function parseArgs(argv) {
+  const get = (name) => argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+  const startAt = get('start-at')?.split(',').map(Number);
+  return {
+    fakeUsage: get('fake-usage'), // path to a saved usage JSON, for screenshots/dev without network
+    snapshot: get('snapshot'), // write PNGs of the pet (and panel) after load, then quit
+    snapshotStats: argv.includes('--snapshot-stats'),
+    reaction: get('reaction'), // fire a reaction shortly before the snapshot, e.g. 'yawn'
+    claudeRunning: get('claude-running'), // 'true' | 'false' to override process detection
+    petState: get('pet-state'), // force a pet state, e.g. 'lounging'
+    startAt: startAt?.length === 2 && startAt.every(Number.isFinite) ? { x: startAt[0], y: startAt[1] } : null,
+  };
+}
+
+function userDataDir() {
+  return app.getPath('userData');
+}
+
+function randomBetween(min, max) {
+  return min + Math.random() * (max - min);
+}
+
+function loadPet(name) {
+  const dir = path.join(ROOT, 'pets', name);
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'pet.json'), 'utf8'));
+  return {
+    ...manifest,
+    bodyInsets: manifest.bodyInsets || ZERO_INSETS,
+    timings: { disappearMs: 0, statsMergeMs: 0, ...manifest.timings },
+    dir,
+    url: `app://bundle/pets/${encodeURIComponent(name)}/${manifest.file}`,
+  };
+}
+
+function serveAppFiles() {
+  protocol.handle('app', (request) => {
+    const relative = decodeURIComponent(new URL(request.url).pathname).replace(/^\/+/, '');
+    const file = path.resolve(ROOT, relative);
+    if (!SERVED_DIRS.some((dir) => file.startsWith(dir))) return new Response('Not found', { status: 404 });
+    return net.fetch(pathToFileURL(file).toString());
+  });
+}
+
+// ---------- view model sent to both windows ----------
+
+function displayState() {
+  return args.petState || petState;
+}
+
+function pickScoped(u) {
+  if (!u?.scoped?.length) return null;
+  const wanted = config.scopedLimit?.toLowerCase();
+  return (wanted && u.scoped.find((m) => m.label.toLowerCase() === wanted)) || u.scoped[0];
+}
+
+function buildView() {
+  const { usage: u, status, message, fetchedAt } = usage.snapshot;
+  const now = new Date();
+  const scoped = pickScoped(u);
+  const meters = [u?.session, u?.weekly, scoped].filter(Boolean).map((m, i) => ({
+    id: m.id,
+    label: m.label,
+    mark: i + 1, // matches the 1/2/3 dots on the pet's orbs
+    percent: Math.round(m.percent),
+    level: levelFor(m.percent),
+    color: colorForPercent(m.percent),
+    resetText: formatReset(m.resetsAt, now),
+    countdown: formatCountdown(m.resetsAt, now),
+  }));
+  const orbs = { session: u?.session?.percent ?? 0, weekly: u?.weekly?.percent ?? 0, model: scoped?.percent ?? 0 };
+  return {
+    petState: displayState(),
+    meters,
+    orbs,
+    orbColors: {
+      session: colorForPercent(orbs.session),
+      weekly: colorForPercent(orbs.weekly),
+      model: colorForPercent(orbs.model),
+    },
+    flipped: isFlipped(),
+    status,
+    message,
+    updatedAgo: formatAgo(fetchedAt, now),
+    claudeRunning,
+    lightBackdrop: config.lightBackdrop === 'auto' ? !nativeTheme.shouldUseDarkColors : !!config.lightBackdrop,
+  };
+}
+
+function pushView() {
+  if (!usage) return;
+  lastViewPush = Date.now();
+  const view = buildView();
+  for (const win of [petWin, panelWin]) {
+    if (win && !win.isDestroyed()) win.webContents.send('app:view', view);
+  }
+  if (tray) {
+    const summary = view.meters.map((m) => `${m.label} ${m.percent}%`).join(' · ');
+    tray.setToolTip(`Claude Pet${summary ? ` — ${summary}` : ''}`.slice(0, 127));
+  }
+}
+
+function sendReaction(name) {
+  if (name && petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:reaction', name);
+}
+
+// ---------- pet behavior ----------
+
+function markInteraction() {
+  lastInteraction = Date.now();
+  if (petState === 'lounging') tick();
+}
+
+function computePetState(now = Date.now()) {
+  return choosePetState({
+    claudeRunning,
+    usage: usage.snapshot.usage,
+    warnAt: config.warnAtPercent,
+    needsLogin: usage.snapshot.status === 'needs-login',
+    userAwayMs: powerMonitor.getSystemIdleTime() * 1000,
+    petIdleMs: statsOpen || drag ? 0 : now - lastInteraction,
+    loungeAfterMs: config.loungeAfterMinutes * 60_000,
+    awayAfterMs: config.sleepWhenAwayMinutes * 60_000,
+  });
+}
+
+function maybeFidget(now) {
+  if (now < nextFidgetAt) return;
+  const options = config.fidgets && !statsOpen && !drag && petWin.isVisible() ? fidgetsFor(pet, displayState()) : [];
+  if (!options.length) {
+    nextFidgetAt = now + 5000;
+    return;
+  }
+  const pick = options[Math.floor(Math.random() * options.length)];
+  sendReaction(pick.trigger);
+  nextFidgetAt = now + pick.ms + randomBetween(25_000, 70_000);
+}
+
+function tick() {
+  if (!usage || !petWin || quitting) return;
+  const now = Date.now();
+  const next = computePetState(now);
+
+  if (next !== petState) {
+    sendReaction(wakeReaction(pet, petState, next));
+    petState = next;
+    pushView();
+    // Poses occupy different parts of the pet box, so settle into the new pose's bounds.
+    if (displayState() === 'lounging' && config.loungeOnTaskbar) glideToGround();
+    else settlePet();
+  } else if (now - lastViewPush > VIEW_REFRESH_MS) {
+    pushView(); // keeps reset countdowns fresh
+  }
+  maybeFidget(now);
+}
+
+// ---------- pet window placement ----------
+
+function petCenter(pos = petPos) {
+  return { x: Math.round(pos.x + PET_SIZE.width / 2), y: Math.round(pos.y + PET_SIZE.height / 2) };
+}
+
+function workAreaAt(point) {
+  return screen.getDisplayNearestPoint(point).workArea;
+}
+
+function isFlipped() {
+  return facing !== (pet.artFacing || 1);
+}
+
+function currentInsets() {
+  return mirrorInsets(insetsForState(pet, displayState()), isFlipped());
+}
+
+function placementOptions(workArea) {
+  return { petSize: PET_SIZE, insets: currentInsets(), workArea, snapPx: SNAP_PX };
+}
+
+function setPetBounds(pos) {
+  petPos = { x: pos.x, y: pos.y };
+  petWin.setBounds({ ...petPos, ...PET_SIZE }); // setBounds keeps transparent windows from growing on scaled displays
+  if (statsOpen) placePanel();
+}
+
+function movePet(pos, workArea = workAreaAt(petCenter(pos))) {
+  const placed = clampPet(pos, placementOptions(workArea));
+  grounded = placed.grounded;
+  setPetBounds(placed);
+}
+
+function savePetPosition() {
+  if (args.snapshot) return;
+  config.petPosition = petPos;
+  saveConfig(userDataDir(), config);
+}
+
+function initialPetPosition() {
+  const start = args.startAt || config.petPosition;
+  if (start && Number.isFinite(start.x) && Number.isFinite(start.y)) return start;
+  const { workArea } = screen.getPrimaryDisplay();
+  return { x: workArea.x + 24, y: workArea.y + workArea.height }; // clamping drops this onto the taskbar
+}
+
+// Turn toward the middle of the screen after the pet settles somewhere new.
+function updateFacing() {
+  const center = petCenter();
+  const next = chooseFacing({ centerX: center.x, workArea: workAreaAt(center), current: facing });
+  if (next === facing) return;
+  facing = next;
+  pushView();
+  settlePet(); // body insets mirror with the art
+}
+
+function cancelGlide() {
+  clearInterval(glide);
+  glide = null;
+}
+
+function glideTo(target, duration, onDone) {
+  cancelGlide();
+  const from = { ...petPos };
+  if (from.x === target.x && from.y === target.y) {
+    onDone?.();
+    return;
+  }
+  const started = Date.now();
+  glide = setInterval(() => {
+    const t = Math.min(1, (Date.now() - started) / duration);
+    const eased = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+    setPetBounds({
+      x: Math.round(from.x + (target.x - from.x) * eased),
+      y: Math.round(from.y + (target.y - from.y) * eased),
+    });
+    if (t === 1) {
+      cancelGlide();
+      onDone?.();
+    }
+  }, 16);
+}
+
+// Slide (briefly) into the current pose's on-screen bounds.
+function settlePet() {
+  if (drag) return;
+  const placed = clampPet(petPos, placementOptions(workAreaAt(petCenter())));
+  grounded = placed.grounded;
+  glideTo(placed, 260, savePetPosition);
+}
+
+function glideToGround() {
+  if (drag) return;
+  const target = clampPet({ x: petPos.x, y: Number.MAX_SAFE_INTEGER }, placementOptions(workAreaAt(petCenter())));
+  const distance = Math.hypot(target.x - petPos.x, target.y - petPos.y);
+  closeStats();
+  glideTo(target, Math.min(2200, Math.max(300, distance * 2.2)), () => {
+    grounded = true;
+    updateFacing();
+    savePetPosition();
+  });
+}
+
+// ---------- windows ----------
+
+function baseWindowOptions() {
+  return {
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  };
+}
+
+function createPetWindow() {
+  const start = initialPetPosition();
+  const placed = clampPet(start, placementOptions(workAreaAt(petCenter(start))));
+  petPos = { x: placed.x, y: placed.y };
+  grounded = placed.grounded;
+
+  petWin = new BrowserWindow({ ...baseWindowOptions(), ...petPos, ...PET_SIZE });
+  petWin.setAlwaysOnTop(true, 'floating');
+  petWin.once('ready-to-show', () => petWin.showInactive());
+  petWin.on('blur', closeStats); // clicking anywhere else closes the stats
+  petWin.webContents.on('did-finish-load', pushView);
+  petWin.loadURL('app://bundle/src/renderer/pet.html');
+}
+
+function createPanelWindow() {
+  panelWin = new BrowserWindow({
+    ...baseWindowOptions(),
+    focusable: false, // clicking the panel must not steal focus from the pet (which would close it)
+    width: panelSize.width + PANEL_PAD * 2,
+    height: panelSize.height + PANEL_PAD * 2,
+  });
+  panelWin.setAlwaysOnTop(true, 'floating');
+  panelWin.webContents.on('did-finish-load', pushView);
+  panelWin.loadURL('app://bundle/src/renderer/panel.html');
+}
+
+function placePanel() {
+  const size = { width: panelSize.width + PANEL_PAD * 2, height: panelSize.height + PANEL_PAD * 2 };
+  const placed = panelPlacement({
+    petPos,
+    petSize: PET_SIZE,
+    insets: currentInsets(),
+    panelSize: size,
+    workArea: workAreaAt(petCenter()),
+    gap: 2 - PANEL_PAD,
+    margin: 8 - PANEL_PAD,
+  });
+  panelWin.setBounds({ x: placed.x, y: placed.y, ...size });
+  return placed.side;
+}
+
+function clearStatsTimers() {
+  statsTimers.forEach(clearTimeout);
+  statsTimers = [];
+}
+
+// Opening: the orbs fly together and merge first, then the panel grows out of that bubble.
+function openStats() {
+  if (statsOpen || !petWin.isVisible()) return;
+  statsOpen = true;
+  cancelGlide();
+  markInteraction();
+  clearStatsTimers();
+  const side = placePanel();
+  petWin.webContents.send('pet:stats', { open: true, side });
+  statsTimers.push(setTimeout(() => {
+    if (!statsOpen) return;
+    placePanel();
+    panelWin.showInactive();
+    panelWin.webContents.send('panel:open', side);
+  }, pet.timings.statsMergeMs * 0.6));
+}
+
+// Closing: the panel shrinks back into the bubble, then the bubble splits into orbs again.
+function closeStats() {
+  if (!statsOpen) return;
+  statsOpen = false;
+  lastInteraction = Date.now();
+  clearStatsTimers();
+  panelWin.webContents.send('panel:close');
+  statsTimers.push(setTimeout(() => {
+    if (statsOpen) return;
+    panelWin.hide();
+    petWin.webContents.send('pet:stats', { open: false });
+  }, 240));
+}
+
+function showStatsFromMenu() {
+  if (!petWin.isVisible()) showPet();
+  petWin.focus(); // so clicking elsewhere closes it again
+  openStats();
+}
+
+function showPet() {
+  petWin.showInactive();
+  sendReaction(pet.reactions?.appear);
+  refreshTrayMenu();
+}
+
+function hidePet() {
+  closeStats();
+  sendReaction(pet.reactions?.disappear);
+  setTimeout(() => {
+    petWin.hide();
+    refreshTrayMenu();
+  }, pet.reactions?.disappear ? pet.timings.disappearMs : 0);
+}
+
+function toggleVisible() {
+  if (!petWin) return;
+  if (petWin.isVisible()) hidePet();
+  else showPet();
+}
+
+function quitWithGoodbye() {
+  if (quitting) return;
+  quitting = true;
+  closeStats();
+  const visible = petWin?.isVisible() && pet.reactions?.disappear;
+  if (visible) sendReaction(pet.reactions.disappear);
+  setTimeout(() => app.quit(), visible ? pet.timings.disappearMs : 0);
+}
+
+// Eyes follow the mouse.
+function trackCursor() {
+  if (!petWin?.isVisible() || drag) return;
+  const next = lookFromCursor({ cursor: screen.getCursorScreenPoint(), center: petCenter(), flipped: isFlipped() });
+  if (Math.abs(next.x - lastLook.x) < 0.02 && Math.abs(next.y - lastLook.y) < 0.02) return;
+  lastLook = next;
+  petWin.webContents.send('pet:look', next);
+}
+
+// ---------- tray ----------
+
+function trayIcon() {
+  const image = nativeImage.createFromPath(path.join(pet.dir, pet.trayIcon || 'preview-dark.png'));
+  if (image.isEmpty()) return image;
+  const { width, height } = image.getSize();
+  const side = Math.min(width, height);
+  return image
+    .crop({ x: Math.floor((width - side) / 2), y: Math.floor((height - side) / 2), width: side, height: side })
+    .resize({ width: 32, height: 32, quality: 'best' });
+}
+
+function buildMenu() {
+  return Menu.buildFromTemplate([
+    { label: 'Show usage stats', click: showStatsFromMenu },
+    { label: petWin?.isVisible() ? 'Hide pet' : 'Show pet', accelerator: config.hideHotkey, registerAccelerator: false, click: toggleVisible },
+    { label: 'Refresh usage now', click: () => usage.refreshNow() },
+    { label: 'Open Claude usage page', click: () => shell.openExternal(USAGE_PAGE) },
+    { type: 'separator' },
+    { label: 'Launch at startup', type: 'checkbox', checked: !!config.launchAtStartup, click: (item) => setLaunchAtStartup(item.checked) },
+    { label: 'Open settings file', click: () => shell.openPath(configPath(userDataDir())) },
+    { type: 'separator' },
+    { label: 'Quit Claude Pet', click: quitWithGoodbye },
+  ]);
+}
+
+function refreshTrayMenu() {
+  tray?.setContextMenu(buildMenu());
+}
+
+function createTray() {
+  tray = new Tray(trayIcon());
+  tray.on('click', toggleVisible);
+  refreshTrayMenu();
+}
+
+function loginItemSettings() {
+  const devArgs = app.isPackaged ? {} : { path: process.execPath, args: [ROOT] };
+  return { openAtLogin: !!config.launchAtStartup, ...devArgs };
+}
+
+function setLaunchAtStartup(enabled) {
+  config.launchAtStartup = enabled;
+  saveConfig(userDataDir(), config);
+  app.setLoginItemSettings(loginItemSettings());
+  refreshTrayMenu();
+}
+
+// ---------- Claude app detection ----------
+
+async function detectClaude() {
+  if (args.claudeRunning) return args.claudeRunning === 'true';
+  return isClaudeRunning(config.claudeProcessNames);
+}
+
+async function watchClaude() {
+  const running = await detectClaude();
+  if (running !== claudeRunning) {
+    claudeRunning = running;
+    usage.setIntervalMinutes(running ? config.pollMinutes : config.idlePollMinutes);
+    tick();
+  }
+  setTimeout(watchClaude, CLAUDE_CHECK_MS);
+}
+
+// ---------- IPC ----------
+
+function registerIpc() {
+  ipcMain.handle('pet:get-config', () => ({
+    petUrl: pet.url,
+    wasmUrl: 'app://bundle/node_modules/@rive-app/webgl2/rive.wasm',
+    artboard: pet.artboard,
+    stateMachine: pet.stateMachine,
+    binding: pet.binding,
+    states: pet.states,
+    reactions: pet.reactions,
+  }));
+
+  ipcMain.on('pet:drag-start', () => {
+    cancelGlide();
+    closeStats();
+    const cursor = screen.getCursorScreenPoint();
+    drag = { dx: cursor.x - petPos.x, dy: cursor.y - petPos.y };
+    markInteraction();
+  });
+
+  ipcMain.on('pet:drag-move', () => {
+    if (!drag) return;
+    const cursor = screen.getCursorScreenPoint();
+    movePet({ x: cursor.x - drag.dx, y: cursor.y - drag.dy }, workAreaAt(cursor));
+  });
+
+  ipcMain.on('pet:drag-end', () => {
+    if (!drag) return;
+    drag = null;
+    markInteraction();
+    updateFacing();
+    savePetPosition();
+  });
+
+  ipcMain.on('pet:click', () => {
+    markInteraction();
+    if (statsOpen) closeStats();
+    else openStats();
+  });
+  ipcMain.on('pet:close-stats', closeStats);
+  ipcMain.on('pet:context-menu', () => {
+    closeStats();
+    buildMenu().popup({ window: petWin });
+  });
+
+  ipcMain.on('panel:clicked', closeStats);
+  ipcMain.on('panel:size', (_event, size) => {
+    const width = Math.ceil(Number(size?.width));
+    const height = Math.ceil(Number(size?.height));
+    if (!(width > 0 && height > 0)) return;
+    panelSize = { width, height };
+    if (statsOpen) placePanel();
+  });
+}
+
+// ---------- startup ----------
+
+function scheduleSnapshot() {
+  if (args.snapshotStats) setTimeout(openStats, 3500);
+  if (args.reaction) setTimeout(() => sendReaction(args.reaction), 5000);
+  setTimeout(async () => {
+    fs.writeFileSync(args.snapshot, (await petWin.webContents.capturePage()).toPNG());
+    const work = workAreaAt(petCenter());
+    console.log('[snapshot] state', displayState(), 'pet bounds', JSON.stringify(petWin.getBounds()), 'grounded', grounded, 'flipped', isFlipped(), 'workArea', JSON.stringify(work));
+    if (args.snapshotStats) {
+      const panelFile = args.snapshot.replace(/\.png$/i, '-panel.png');
+      fs.writeFileSync(panelFile, (await panelWin.webContents.capturePage()).toPNG());
+      console.log('[snapshot] panel bounds', JSON.stringify(panelWin.getBounds()), 'visible', panelWin.isVisible());
+    }
+    app.quit();
+  }, 6500);
+}
+
+app.whenReady().then(async () => {
+  config = loadConfig(userDataDir());
+  pet = loadPet(config.pet);
+  serveAppFiles();
+  registerIpc();
+
+  claudeRunning = await detectClaude();
+  usage = new UsageService({
+    credentialsPath: config.credentialsPath || defaultCredentialsPath(),
+    userAgent: `claude-pet/${app.getVersion()}`,
+    cachePath: path.join(userDataDir(), 'usage-cache.json'),
+    intervalMinutes: claudeRunning ? config.pollMinutes : config.idlePollMinutes,
+    fakeUsagePath: args.fakeUsage,
+  });
+  usage.on('update', tick);
+
+  createPetWindow();
+  updateFacing();
+  createPanelWindow();
+  createTray();
+  if (!args.snapshot && !globalShortcut.register(config.hideHotkey, toggleVisible)) {
+    console.warn(`[hotkey] could not register ${config.hideHotkey} (in use by another app?)`);
+  }
+  if (config.launchAtStartup && !args.snapshot) app.setLoginItemSettings(loginItemSettings());
+
+  // Taskbar moved, resolution changed or a monitor was unplugged: keep the pet on screen.
+  const reclamp = () => {
+    movePet(petPos);
+    updateFacing();
+  };
+  screen.on('display-metrics-changed', reclamp);
+  screen.on('display-removed', reclamp);
+
+  nextFidgetAt = Date.now() + randomBetween(15_000, 30_000);
+  usage.start();
+  setTimeout(watchClaude, CLAUDE_CHECK_MS);
+  setInterval(tick, TICK_MS);
+  setInterval(trackCursor, LOOK_MS);
+  nativeTheme.on('updated', pushView);
+  if (args.snapshot) scheduleSnapshot();
+});
+
+app.on('second-instance', () => petWin && showPet());
+app.on('will-quit', () => globalShortcut.unregisterAll());

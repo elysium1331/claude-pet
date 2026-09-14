@@ -1,0 +1,153 @@
+/* body padding must match PANEL_PAD in main.js */
+body {
+  box-sizing: border-box;
+  padding: 14px;
+}
+
+.shadow {
+  width: max-content;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.45));
+}
+
+/* The card grows out of a bubble at the edge nearest the pet. */
+#card {
+  --origin: 50% 100%;
+  box-sizing: border-box;
+  width: 212px;
+  padding: 10px 12px 9px;
+  border-radius: 14px;
+  background: var(--card);
+  border: 1px solid var(--edge);
+  color: var(--ink);
+  font-size: 12px;
+  cursor: default;
+  opacity: 0;
+  clip-path: circle(12px at var(--origin));
+  transition: clip-path 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.12s linear;
+}
+
+body.below #card {
+  --origin: 50% 0%;
+}
+
+body.open #card {
+  opacity: 1;
+  clip-path: circle(160% at var(--origin));
+}
+
+/* ---------- rows ---------- */
+
+.row {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  column-gap: 8px;
+  align-items: center;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.row + .row {
+  margin-top: 8px;
+}
+
+body.open .row {
+  opacity: 1;
+  transform: none;
+}
+
+body.open .row:nth-child(1) { transition-delay: 0.1s; }
+body.open .row:nth-child(2) { transition-delay: 0.16s; }
+body.open .row:nth-child(3) { transition-delay: 0.22s; }
+
+.ring {
+  width: 26px;
+  height: 26px;
+  transform: rotate(-90deg);
+}
+
+.ring .track {
+  fill: rgba(12, 16, 30, 0.9);
+  stroke: var(--track);
+  stroke-width: 3;
+}
+
+.ring .fill {
+  fill: none;
+  stroke: var(--calm);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: var(--circ);
+  stroke-dashoffset: var(--circ);
+  transition: stroke-dashoffset 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) 0.15s;
+}
+
+body.open .ring .fill {
+  stroke-dashoffset: var(--offset);
+}
+
+.ring .mark {
+  fill: var(--ink);
+}
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.name {
+  font-weight: 600;
+}
+
+.pct {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.bar {
+  height: 4px;
+  margin: 3px 0 2px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--track);
+}
+
+.bar i {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--calm);
+  transition: width 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) 0.15s;
+}
+
+body.open .bar i {
+  width: var(--pct);
+}
+
+.when {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* --color comes from the app's usage color scale (blue -> yellow -> orange -> red) */
+.row .pct { color: var(--color, var(--calm)); }
+.row .bar i { background: var(--color, var(--calm)); }
+.row .ring .fill { stroke: var(--color, var(--calm)); }
+
+#footer {
+  margin-top: 9px;
+  padding-top: 6px;
+  border-top: 1px solid var(--edge);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+#footer:empty {
+  display: none;
+}
+
+.empty {
+  color: var(--muted);
+}
