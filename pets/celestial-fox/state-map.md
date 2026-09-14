@@ -1,8 +1,8 @@
-# Celestial Fox — revision 4, Batch 1
+# Celestial Fox — revision 4, Batch 2
 
 **Runtime file:** `celestial-fox.riv` · **Artboard:** `CelestialFox` · **State machine:** `PetStateMachine` · **View model:** `PetController` (default instance).
 
-One transparent **560 × 600** artboard. Batch 1 adds desktop life controls; Batches 2–4 are not implemented in this delivery. Existing names, IDs, state values 0–7, all eight original animation definitions, the `usage_orbit` timeline, and all 56 original state transitions are preserved.
+One transparent **560 × 600** artboard. Batches 1 and 2 are implemented. Batches 3–4 are not included. All existing named IDs, 32 prior animation definitions, and 81 prior pet-state transitions are preserved. Batch 2 adds Claude activity states and usage-event reactions.
 
 ## Persistent states
 
@@ -19,8 +19,11 @@ Set the Number property `state` to an integer. The selected state remains active
 | 6 | `low_usage_worry` | 4 s, loop | Worried brows/mouth, lowered ears |
 | 7 | `limit_reached` | 6 s, loop | Dim, lowered, tired floating pose |
 | 8 | `lounging` | 8 s, loop | Grounded body and chin, half-closed slow blinks, breathing, ear flick, lazy tail swish |
+| 9 | `working_busy` | 2.5 s, loop | Alternating fin typing on a small glowing work pad, focused nod and key pulses |
+| 10 | `confused` | 3 s, loop | Puzzled head sway, asymmetric brows, searching eyes and question/swirl motes |
+| 11 | `disconnected` | 4 s, loop | Looking around for a connection, broken-link mote, cloudy grey meters in a closer orbit |
 
-States 4 and 5 remain the original one-shot-and-hold states to retain compatibility. Re-selecting an already selected state does not restart its timeline. To replay 4 or 5, briefly select another state, then select it again. All states connect directly to each other. Existing blends remain 180 ms (320 ms entering sleeping/tired). Lounging uses a short staged settling motion: meters move aside before the body lowers, with 180–360 ms blends. When waking, the head rises before the meters return to the floating orbit.
+States 4 and 5 remain the original one-shot-and-hold states to retain compatibility. Re-selecting an already selected state does not restart its timeline. To replay 4 or 5, briefly select another state, then select it again. All states can transition to each other, with an internal settling stage when entering lounging. New activity states use 240 ms blends; grounded transitions can use 360 ms. Existing blends remain 180 ms (320 ms entering sleeping/tired). Lounging uses a short staged settling motion: meters move aside before the body lowers, with 180–360 ms blends. When waking, the head rises before the meters return to the floating orbit.
 
 ## Reactions — view-model triggers
 
@@ -40,14 +43,23 @@ Durations below are authored timeline lengths. The automatic blend back can add 
 | `perkUp` | 1.5 s | Yes | **Sets `state = 0` inside the file**, wakes and hops into idle; works from sleeping/lounging and other states |
 | `appear` | 1 s | Whole character visibility | Restores selected state and meters with vector sparkles |
 | `disappear` | 0.8 s | Whole character visibility | **Holds completely invisible** until `appear`; keeps the selected state value |
+| `alertRing` | 1.2 s | Yes; small startle | Selected state; sharp bell ring. App selects `state = 3` to hold attention afterward |
+| `approve` | 1.2 s | No; head and eyes | Selected state; happy nod and soft squint |
+| `taskDone` | 2.5 s | Yes | Selected state; celebration bounce, checkmark bubble and sparkle burst |
+| `error` | 1.5 s | Yes | Selected state; small flinch, squeezed eyes and oops motes |
+| `usageReset` | 2.5 s | Yes | Selected state; stretch while all three arcs drain, flash and refill to their live app-supplied values |
+| `limitHit` | 2 s | Yes | Selected state; deflated sigh while the highest-usage orb fills to full temporarily. App selects `state = 7` afterward |
+| `greet` | 2 s | No; fin and head | Selected state; friendly repeated wave beside the head |
+| `goodbye` | 1.5 s | No; fin and head | Selected state; smaller wave. App fires `disappear` afterward |
+
 
 Visibility has its own animation layer and can run alongside fidgets. `disappear` intentionally hides the whole pet, including meters, as required by its fully invisible endpoint. If `statsOpen` remains true, `appear` restores the pet with the meters still hidden for the stats panel. `perkUp` does not cancel a latched `disappear`; call `appear` to unhide.
 
-## All view-model properties
+## All view-model properties (31)
 
 | Property | Type | Range | Default | Effect |
 |---|---|---|---|---|
-| `state` | Number | Integer 0–8 | `0` | Persistent state selector |
+| `state` | Number | Integer 0–11 | `0` | Persistent state selector |
 | `session` | Number | 0–100 | `0` | One-dot usage meter |
 | `weekly` | Number | 0–100 | `0` | Two-dot usage meter |
 | `fable` | Number | 0–100 | `0` | Three-dot usage meter |
@@ -70,10 +82,22 @@ Visibility has its own animation layer and can run alongside fidgets. `disappear
 | `perkUp` | Trigger | Event | Not fired | Reaction above; writes `state = 0` |
 | `appear` | Trigger | Event | Not fired | Restore visibility |
 | `disappear` | Trigger | Event | Not fired | Hide and hold |
+| `alertRing` | Trigger | Event | Not fired | Bell/startle reaction |
+| `approve` | Trigger | Event | Not fired | Happy nod reaction |
+| `taskDone` | Trigger | Event | Not fired | Celebration/checkmark reaction |
+| `error` | Trigger | Event | Not fired | Flinch/oops reaction |
+| `usageReset` | Trigger | Event | Not fired | Drain/flash/refill reaction; preserves usage data |
+| `limitHit` | Trigger | Event | Not fired | Sigh/full-meter reaction; preserves usage data and state |
+| `greet` | Trigger | Event | Not fired | Friendly wave |
+| `goodbye` | Trigger | Event | Not fired | Small wave; does not hide by itself |
 
 Supply usage data and colors from the app; the file makes no network requests. Rings fill clockwise from the top. `0` is empty/dim and `100` is full. Decimal percentages work, and visual fill clamps to 0–100. **Built-in calm/amber/red banding is disabled.** Each Color property independently drives its meter's fill ring and ring glow, plus its soft halo/core illumination. Changing a usage Number changes the fill amount, not the ring color. The app supplies its own blue → yellow → orange → red interpolation and timing; color updates are immediate in the file. Set opaque RGB colors for normal use; color alpha also modulates the colored artwork. Glow has an additional fixed soft falloff. The 1/2/3-dot marks remain opaque white (`#FFFFFF`), upright, and independent of the supplied color. At 140 × 150, each meter shell is approximately 20 px across and the fill ring approximately 2.2 px thick.
 
 The three Color defaults are opaque `#B7E7FF` (`0xFFB7E7FF` as packed ARGB), serving only as initial fallback values. The app should set all three after loading. Neutral shell/empty-track colors remain unchanged. The old threshold overlay objects are retained, disabled, to preserve their existing IDs.
+
+In `disconnected`, only the rendered meter artwork becomes grey/cloudy; all app-owned usage and Color properties remain unchanged. The 24 s orbit narrows from a 167.5 px horizontal radius to 120 px (vertical radius 48 px), below the face. On exit, the latest app-supplied colors are restored automatically, including changes made while disconnected. White dot marks stay visible.
+
+`usageReset` multiplies the current usage arcs through vector trim effects: drain, flash, then refill to the latest usage values. It never writes usage Numbers or Color properties. `limitHit` adds the missing arc to the highest-usage meter temporarily; ties prefer session, then weekly, then fable. The arc returns to the live usage value when the reaction finishes. The app should supply the actual reached usage (usually 100) if it must stay full, and select `state = 7` for persistent tired behavior. All eight new triggers leave `state` unchanged.
 
 The regular independent meter orbit lasts 24 s. Lounging switches to a slower 36 s orbit, lower and to the left of the resting face. Meters are independent of the tired-state dimming, expression changes, and one-shot state holds. Decorative pearls and antenna tips remain vector artwork.
 
@@ -83,7 +107,7 @@ Meeting points, in artboard pixels:
 
 | Pose | Above head, `statsSide = 0` | Below tail, `statsSide = 1` |
 |---|---|---|
-| Floating states 0–7 | `(280, 45)` | `(280, 580)` |
+| Floating states 0–7 and 9–11 | `(280, 45)` | `(280, 580)` |
 | Lounging, state 8 | `(310, 365)` | `(100, 580)` |
 
 The named transform `stats_meeting_point` is exported for hosts that need its world position. During a state transition, let the panel follow the intended destination pose rather than assuming a constant anchor.
@@ -130,6 +154,10 @@ const pet = new Rive({
 });
 
 // After onLoad:
+// pet.viewModelInstance.number('state').value = 9; // Working with tools
+// pet.viewModelInstance.trigger('taskDone').trigger();
+// pet.viewModelInstance.trigger('usageReset').trigger();
+// pet.viewModelInstance.number('state').value = 11; // Disconnected
 // pet.viewModelInstance.number('state').value = 8;
 // pet.viewModelInstance.trigger('yawn').trigger();
 // pet.viewModelInstance.trigger('perkUp').trigger(); // Also sets state = 0
@@ -160,13 +188,19 @@ Runtime caveats:
 
 `celestial-fox-source.zip` contains editable RML artwork, rig, timelines, data bindings, state machine, `rive.yaml`, this map, and verification reports. Compile from that source with **Rive CLI 1.0.3** (or compatible newer tooling): `rive . --once`. The `.riv` is the compiled runtime deliverable. An editor `.rev` file is not included.
 
-Artwork uses only vector paths, gradients, transforms, and a three-bone skinned tail. There are no embedded images, fonts, audio, scripts, or external runtime assets. The file stays below 100 KB, comfortably below the requested approximately 400 KB limit.
+Artwork uses only vector paths, gradients, transforms, and a three-bone skinned tail. There are no embedded images, fonts, audio, scripts, or external runtime assets. The runtime file is 141,888 bytes (about 139 KiB), comfortably below the requested approximately 400 KB limit.
 
-Four contact sheets show every new loop/reaction, with individual cells rendered directly at 560 × 600 or 140 × 150 in WebGL2 2.42.1. White previews enable `lightBackdrop`. All previews use sample usage 42/78/94, with the app explicitly supplying colors `#B7E7FF`, `#FFD08B`, and `#FF997C`; these are preview choices, not automatic thresholds. The GIF pack contains one looping comparison clip per new animation, with dark and white versions side by side. GIF repetition is a preview convenience: reactions remain one-shot in the `.riv`, and disappear holds invisible until appear.
+Four contact sheets show every new loop/reaction, with individual cells rendered directly at 560 × 600 or 140 × 150 in WebGL2 2.42.1. White previews enable `lightBackdrop`. All previews use sample usage 42/78/94, with the app explicitly supplying colors `#B7E7FF`, `#FFD08B`, and `#FF997C`; these are preview choices, not automatic thresholds. The GIF pack contains one looping comparison clip per new animation, with dark and white versions side by side. GIF repetition is a preview convenience: reactions remain one-shot in the `.riv`, and `goodbye` does not disappear by itself.
 
-Color add-on verification in **@rive-app/webgl2 2.42.1: 345/345 checks passed**. Rendered pixels confirmed four live colors for each ring and its glow across all nine states, white identity dots, and unchanged app-selected colors across the former 70/90 thresholds. The public high-level `viewModelInstance.color(name).rgb(r,g,b)` API was also checked. `verification/color-bindings-webgl2-2.42.1.json` records those results. The glow checks compare hue independently from its intentional brightness falloff.
+Verification in **@rive-app/webgl2 2.42.1**:
 
-Validation reports accompany the source: **387/387 web-runtime checks passed**, covering all nine states, repeated firing of all ten triggers across those states, property behavior, disappearance/restoration, and sampled meter-to-face clearance during reactions and lounging transitions. Structural checks confirm all prior named IDs, all 32 Batch 1 timelines, and all 81 existing pet-state transitions remain intact. A 600-frame native render benchmark on this machine measured approximately 0.05 ms mean animation advance and 0.23 ms mean rendering; these are local native measurements, not a guarantee for a particular browser/GPU.
+- **810/810 state, trigger and integration checks**: all 12 states, all 18 triggers fired repeatedly across every state, automatic return, stats, gaze, hover, visibility and sampled meter-to-face clearance across reactions and lounging transitions.
+- **417/417 color checks**: live ring/glow colors and white marks across states 0–10, former usage thresholds and the public high-level Color API. State 11 intentionally renders grey and is covered by the event checks.
+- **37/37 usage-event checks**: actual rendered arc drain/refill, highest-usage selection including ties and decimal values, preserved app data, disconnected grey and restoration of the latest color, new stats anchors and all eight public high-level Trigger APIs.
+- Structural preservation: all prior named IDs, all 32 prior timelines and all 81 prior pet-state transitions. One artboard, one state machine, no embedded assets.
 
+Verification reports accompany the source. Face-clearance and visible bounds checks sample authored motion and orbit phases; they are not a proof of every possible simultaneous app-input combination. Fire one body reaction at a time for an uninterrupted gesture. New reactions replace each other's transient meter/badge effects, and an old fidget cancels those effects with the same blend. Visibility remains independent.
 
+`alertRing` and `limitHit` deliberately leave the persistent state to the app. `goodbye` returns to the selected pose; wait approximately 1.7 s before firing `disappear` if the full wave and return blend should be seen. App input, scheduling, quit timing and fetching usage remain outside the file.
 
+Batch 2 is complete. Batch 3 requires a separate continuation.

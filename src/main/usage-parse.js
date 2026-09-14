@@ -105,7 +105,7 @@ function choosePetState({
 }) {
   if (!claudeRunning) return 'sleeping';
   if (userAwayMs >= awayAfterMs) return 'sleeping';
-  if (needsLogin) return 'needsAttention';
+  if (needsLogin) return 'disconnected';
   const worst = Math.max(0, ...allMeters(usage).map((m) => m.percent));
   if (worst >= 100) return 'limitReached';
   if (worst >= warnAt) return 'lowUsage';

@@ -32,15 +32,27 @@
     "idea": 5,
     "lowUsage": 6,
     "limitReached": 7,
-    "lounging": 8
+    "lounging": 8,
+    "workingBusy": 9,
+    "confused": 10,
+    "disconnected": 11
   },
   "reactions": {
     "wake": "perkUp",
     "appear": "appear",
-    "disappear": "disappear"
+    "disappear": "disappear",
+    "greet": "greet",
+    "goodbye": "goodbye",
+    "usageReset": "usageReset",
+    "limitHit": "limitHit",
+    "alert": "alertRing",
+    "approve": "approve",
+    "taskDone": "taskDone",
+    "error": "error"
   },
   "timings": {
     "disappearMs": 850,
+    "goodbyeMs": 1700,
     "statsMergeMs": 400
   },
   "fidgets": [
@@ -52,9 +64,9 @@
     { "trigger": "scratchEar", "ms": 2000, "states": ["idle", "lounging"] },
     { "trigger": "sneeze", "ms": 1500 }
   ],
-  "bodyInsets": { "top": 0.045, "right": 0.118, "bottom": 0.078, "left": 0.118 },
+  "bodyInsets": { "top": 0.045, "right": 0.123, "bottom": 0.078, "left": 0.123 },
   "stateInsets": {
-    "lounging": { "top": 0.658, "right": 0.195, "bottom": 0.017, "left": 0.014 }
+    "lounging": { "top": 0.662, "right": 0.195, "bottom": 0.017, "left": 0.018 }
   },
   "size": { "width": 560, "height": 600 }
 }

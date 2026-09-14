@@ -29,4 +29,40 @@ function lookFromCursor({ cursor, center, flipped = false, reach = 450 }) {
   return { x: x === 0 ? 0 : x, y: clampUnit((cursor.y - center.y) / reach) };
 }
 
-module.exports = { insetsForState, wakeReaction, fidgetsFor, lookFromCursor };
+const RESET_DROP_POINTS = 20; // a drop this large between checks means a limit reset, not rounding noise
+
+function meterPairs(prev, next) {
+  const pairs = [[prev.session, next.session], [prev.weekly, next.weekly]];
+  for (const meter of next.scoped || []) {
+    pairs.push([(prev.scoped || []).find((m) => m.label === meter.label), meter]);
+  }
+  return pairs.filter(([a, b]) => a && b);
+}
+
+// Usage events worth a reaction between two successful usage checks: ['usageReset'], ['limitHit'] or [].
+function usageEvents(prev, next) {
+  if (!prev || !next) return [];
+  const pairs = meterPairs(prev, next);
+  if (pairs.some(([a, b]) => a.percent - b.percent >= RESET_DROP_POINTS)) return ['usageReset'];
+  if (pairs.some(([a, b]) => a.percent < 100 && b.percent >= 100)) return ['limitHit'];
+  return [];
+}
+
+function localDateKey(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function shouldGreet(lastGreetDate, now = new Date()) {
+  return lastGreetDate !== localDateKey(now);
+}
+
+module.exports = {
+  insetsForState,
+  wakeReaction,
+  fidgetsFor,
+  lookFromCursor,
+  usageEvents,
+  localDateKey,
+  shouldGreet,
+};

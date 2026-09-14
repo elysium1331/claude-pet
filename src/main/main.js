@@ -11,7 +11,9 @@ const { UsageService } = require('./usage-service');
 const { isClaudeRunning } = require('./claude-process');
 const { levelFor, colorForPercent, choosePetState, formatReset, formatCountdown, formatAgo } = require('./usage-parse');
 const { ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets } = require('./placement');
-const { insetsForState, wakeReaction, fidgetsFor, lookFromCursor } = require('./behavior');
+const {
+  insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey, shouldGreet,
+} = require('./behavior');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SERVED_DIRS = ['src/renderer', 'node_modules/@rive-app/webgl2', 'pets'].map((d) => path.join(ROOT, d) + path.sep);
@@ -60,6 +62,7 @@ let lastInteraction = Date.now();
 let nextFidgetAt = 0;
 let lastViewPush = 0;
 let lastLook = { x: 0, y: 0 };
+let lastGoodUsage = null;
 let quitting = false;
 
 function parseArgs(argv) {
@@ -165,6 +168,30 @@ function pushView() {
 
 function sendReaction(name) {
   if (name && petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:reaction', name);
+}
+
+// A meaningful reaction (not a random fidget): play it if the pet is awake and visible, and hold off fidgets.
+function playEvent(eventName) {
+  const trigger = pet.reactions?.[eventName];
+  if (!trigger || !petWin?.isVisible() || displayState() === 'sleeping') return false;
+  sendReaction(trigger);
+  nextFidgetAt = Math.max(nextFidgetAt, Date.now() + 10_000);
+  return true;
+}
+
+function handleUsageUpdate() {
+  if (usage.snapshot.status === 'ok') {
+    usageEvents(lastGoodUsage, usage.snapshot.usage).forEach(playEvent);
+    lastGoodUsage = usage.snapshot.usage;
+  }
+  tick();
+}
+
+function greetIfFirstToday() {
+  if (!shouldGreet(config.lastGreetDate)) return;
+  if (!playEvent('greet')) return;
+  config.lastGreetDate = localDateKey();
+  if (!args.snapshot) saveConfig(userDataDir(), config);
 }
 
 // ---------- pet behavior ----------
@@ -353,7 +380,10 @@ function createPetWindow() {
 
   petWin = new BrowserWindow({ ...baseWindowOptions(), ...petPos, ...PET_SIZE });
   petWin.setAlwaysOnTop(true, 'floating');
-  petWin.once('ready-to-show', () => petWin.showInactive());
+  petWin.once('ready-to-show', () => {
+    petWin.showInactive();
+    setTimeout(greetIfFirstToday, 2500); // after the appear sparkle
+  });
   petWin.on('blur', closeStats); // clicking anywhere else closes the stats
   petWin.webContents.on('did-finish-load', pushView);
   petWin.loadURL('app://bundle/src/renderer/pet.html');
@@ -449,13 +479,18 @@ function toggleVisible() {
   else showPet();
 }
 
+// Wave goodbye, fade out, then quit.
 function quitWithGoodbye() {
   if (quitting) return;
-  quitting = true;
   closeStats();
-  const visible = petWin?.isVisible() && pet.reactions?.disappear;
-  if (visible) sendReaction(pet.reactions.disappear);
-  setTimeout(() => app.quit(), visible ? pet.timings.disappearMs : 0);
+  const waved = playEvent('goodbye');
+  quitting = true;
+  const waveMs = waved ? pet.timings.goodbyeMs || 0 : 0;
+  const fades = petWin?.isVisible() && pet.reactions?.disappear;
+  setTimeout(() => {
+    if (fades) sendReaction(pet.reactions.disappear);
+    setTimeout(() => app.quit(), fades ? pet.timings.disappearMs : 0);
+  }, waveMs);
 }
 
 // Eyes follow the mouse.
@@ -620,7 +655,7 @@ app.whenReady().then(async () => {
     intervalMinutes: claudeRunning ? config.pollMinutes : config.idlePollMinutes,
     fakeUsagePath: args.fakeUsage,
   });
-  usage.on('update', tick);
+  usage.on('update', handleUsageUpdate);
 
   createPetWindow();
   updateFacing();

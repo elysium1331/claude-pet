@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { insetsForState, wakeReaction, fidgetsFor, lookFromCursor } = require('../src/main/behavior');
+const { insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, shouldGreet } = require('../src/main/behavior');
 
 const pet = {
   bodyInsets: { top: 0.045, right: 0.118, bottom: 0.078, left: 0.118 },
@@ -33,6 +33,31 @@ test('fidgetsFor only offers fidgets that fit the current pose (idle by default)
   assert.deepEqual(fidgetsFor(pet, 'lounging').map((f) => f.trigger), ['lookAround', 'yawn']);
   assert.deepEqual(fidgetsFor(pet, 'sleeping'), []);
   assert.deepEqual(fidgetsFor({}, 'idle'), []);
+});
+
+const meters = (session, weekly, fable) => ({
+  session: { percent: session },
+  weekly: { percent: weekly },
+  scoped: [{ label: 'Fable', percent: fable }],
+});
+
+test('usageEvents spots a limit resetting and a limit being hit', () => {
+  assert.deepEqual(usageEvents(null, meters(10, 20, 30)), []); // first load: nothing to compare
+  assert.deepEqual(usageEvents(meters(10, 20, 30), meters(12, 21, 30)), []); // normal use
+  assert.deepEqual(usageEvents(meters(84, 40, 30), meters(3, 40, 30)), ['usageReset']); // session reset
+  assert.deepEqual(usageEvents(meters(20, 99, 60), meters(20, 100, 60)), ['limitHit']);
+  assert.deepEqual(usageEvents(meters(20, 100, 60), meters(20, 100, 60)), []); // already at the limit
+  // a reset wins if both happen in the same check
+  assert.deepEqual(usageEvents(meters(90, 99, 60), meters(2, 100, 60)), ['usageReset']);
+  // small drops (rounding / data wobble) are not a reset
+  assert.deepEqual(usageEvents(meters(30, 40, 50), meters(22, 40, 50)), []);
+});
+
+test('shouldGreet says hello once per day', () => {
+  const now = new Date(2026, 8, 14, 9, 30);
+  assert.equal(shouldGreet(null, now), true);
+  assert.equal(shouldGreet('2026-09-13', now), true);
+  assert.equal(shouldGreet('2026-09-14', now), false);
 });
 
 test('lookFromCursor points the eyes at the cursor, mirrored when the art is flipped', () => {
