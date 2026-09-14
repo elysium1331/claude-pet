@@ -42,6 +42,19 @@ Claude Pet uses the login that Claude Code already saved on your computer (`~/.c
 - When the saved login expires, Claude Pet renews it the same way Claude Code does and saves it back to the same file.
 - If it shows **Sign in needed**, open a terminal, run `claude` once, then `/exit`.
 
+## Connect to Claude Code (optional)
+
+Right-click the pet or the tray icon and choose **Connect to Claude Code…**. The pet then reacts to what Claude Code is doing:
+
+- **Thinking / working:** thinking pose while Claude reads your prompt, busy pose while it runs tools
+- **Needs you:** rings a bell and waits when Claude asks for permission, and nods when you approve
+- **Done:** celebrates when a longer task finishes
+- **Oops:** flinches when a tool fails
+
+This adds HTTP hooks to Claude Code's user settings (`~/.claude/settings.json`) that send each event to `http://127.0.0.1:47821` on your own computer. Nothing leaves your machine. A backup of the file is saved next to it first, and your other settings and hooks are left alone. If the pet isn't running, Claude Code simply carries on. Choose **Disconnect from Claude Code…** to remove the hooks again.
+
+While the pet is hidden it stays silent.
+
 ## Settings
 
 Right-click the pet or the tray icon and choose **Open settings file**. Restart the pet after editing.
@@ -55,6 +68,8 @@ Right-click the pet or the tray icon and choose **Open settings file**. Restart 
 | `loungeOnTaskbar` | `true` | Drift down onto the taskbar before lounging |
 | `sleepWhenAwayMinutes` | `10` | Minutes without keyboard/mouse input before it sleeps |
 | `fidgets` | `true` | Occasional idle animations (if the pet has them) |
+| `hooksPort` | `47821` | Local port Claude Code hooks send events to (reconnect after changing) |
+| `celebrateAfterSeconds` | `20` | Only celebrate Claude Code tasks that took at least this long |
 | `hideHotkey` | `CommandOrControl+Alt+P` | Show/hide shortcut |
 | `launchAtStartup` | `false` | Also toggleable from the tray menu |
 | `claudeProcessNames` | `["claude.exe", "claude"]` | Processes that count as "Claude is running" |

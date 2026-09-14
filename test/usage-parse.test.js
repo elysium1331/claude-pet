@@ -91,6 +91,16 @@ test('choosePetState lounges when left alone, sleeps when you are away, and flag
   assert.equal(choosePetState({ ...base, petIdleMs: 999_000, userAwayMs: 600_000 }), 'sleeping');
   assert.equal(choosePetState({ ...base, needsLogin: true }), 'disconnected');
 
+  // Claude Code activity
+  assert.equal(choosePetState({ ...base, activity: 'thinking', petIdleMs: 999_000 }), 'working');
+  assert.equal(choosePetState({ ...base, activity: 'busy' }), 'workingBusy');
+  assert.equal(choosePetState({ ...base, activity: 'waiting', userAwayMs: 999_000 }), 'needsAttention');
+  assert.equal(choosePetState({ ...base, claudeRunning: false, activity: 'waiting' }), 'needsAttention');
+  assert.equal(choosePetState({ ...base, activity: 'busy', userAwayMs: 999_000 }), 'workingBusy'); // working while you're away
+  assert.equal(choosePetState({ ...base, activity: 'busy', needsLogin: true }), 'workingBusy');
+  const maxedOut = parseUsage({ limits: [{ kind: 'session', percent: 100 }] });
+  assert.equal(choosePetState({ ...base, usage: maxedOut, activity: 'busy' }), 'limitReached');
+
   // worry beats lounging so a near-limit warning is never hidden
   const high = parseUsage({ limits: [{ kind: 'weekly_all', percent: 88 }] });
   assert.equal(choosePetState({ ...base, usage: high, petIdleMs: 999_000 }), 'lowUsage');

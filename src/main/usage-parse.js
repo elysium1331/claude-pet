@@ -102,12 +102,16 @@ function choosePetState({
   petIdleMs = 0, // time since the pet itself was touched
   loungeAfterMs = 3 * 60_000,
   awayAfterMs = 10 * 60_000,
+  activity = null, // Claude Code: 'waiting' | 'busy' | 'thinking' | null
 }) {
-  if (!claudeRunning) return 'sleeping';
-  if (userAwayMs >= awayAfterMs) return 'sleeping';
-  if (needsLogin) return 'disconnected';
+  if (activity === 'waiting') return 'needsAttention';
+  if (!claudeRunning && !activity) return 'sleeping';
   const worst = Math.max(0, ...allMeters(usage).map((m) => m.percent));
   if (worst >= 100) return 'limitReached';
+  if (activity === 'busy') return 'workingBusy';
+  if (activity === 'thinking') return 'working';
+  if (userAwayMs >= awayAfterMs) return 'sleeping';
+  if (needsLogin) return 'disconnected';
   if (worst >= warnAt) return 'lowUsage';
   if (petIdleMs >= loungeAfterMs) return 'lounging';
   return 'idle';

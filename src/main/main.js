@@ -3,7 +3,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const {
   app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, globalShortcut, ipcMain, protocol, net, screen, shell,
-  powerMonitor,
+  powerMonitor, dialog,
 } = require('electron');
 const { loadConfig, saveConfig, configPath } = require('./config');
 const { defaultCredentialsPath } = require('./claude-auth');
@@ -14,6 +14,9 @@ const { ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets } = re
 const {
   insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey, shouldGreet,
 } = require('./behavior');
+const { ClaudeActivity } = require('./claude-activity');
+const { startHookServer } = require('./hook-server');
+const hooksInstaller = require('./hooks-installer');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SERVED_DIRS = ['src/renderer', 'node_modules/@rive-app/webgl2', 'pets'].map((d) => path.join(ROOT, d) + path.sep);
@@ -63,6 +66,7 @@ let nextFidgetAt = 0;
 let lastViewPush = 0;
 let lastLook = { x: 0, y: 0 };
 let lastGoodUsage = null;
+let activity = null;
 let quitting = false;
 
 function parseArgs(argv) {
@@ -72,9 +76,11 @@ function parseArgs(argv) {
     fakeUsage: get('fake-usage'), // path to a saved usage JSON, for screenshots/dev without network
     snapshot: get('snapshot'), // write PNGs of the pet (and panel) after load, then quit
     snapshotStats: argv.includes('--snapshot-stats'),
+    snapshotDelay: Number(get('snapshot-delay')) || 6500, // ms after startup to take the snapshot
     reaction: get('reaction'), // fire a reaction shortly before the snapshot, e.g. 'yawn'
     claudeRunning: get('claude-running'), // 'true' | 'false' to override process detection
     petState: get('pet-state'), // force a pet state, e.g. 'lounging'
+    debugHooks: argv.includes('--debug-hooks'), // log Claude Code hook events to the console
     startAt: startAt?.length === 2 && startAt.every(Number.isFinite) ? { x: startAt[0], y: startAt[1] } : null,
   };
 }
@@ -187,6 +193,46 @@ function handleUsageUpdate() {
   tick();
 }
 
+function handleHookEvent(event, payload) {
+  const reactions = activity.handle(event, payload);
+  if (args.debugHooks) console.log('[hooks]', event, payload.session_id || '', '->', reactions.join(',') || '-', '| now', activity.summary() || 'quiet');
+  lastInteraction = Date.now(); // don't flop down to lounge right after Claude finishes
+  reactions.forEach(playEvent);
+  tick();
+}
+
+function hooksStatus() {
+  try {
+    return hooksInstaller.hooksInstalled() ? 'installed' : 'missing';
+  } catch {
+    return 'unreadable';
+  }
+}
+
+async function toggleHooks() {
+  const installed = hooksStatus() === 'installed';
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    buttons: [installed ? 'Remove hooks' : 'Install hooks', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Claude Pet',
+    message: installed ? 'Remove Claude Pet hooks from Claude Code?' : 'Connect Claude Pet to Claude Code?',
+    detail: installed
+      ? 'Claude Code will stop telling the pet when it is working, needs permission or finishes. Your other hooks are left alone.'
+      : `Adds hooks to ${hooksInstaller.settingsPath()} so Claude Code tells the pet when it is working, needs permission, finishes or hits an error. `
+        + 'Events are sent only to this computer (127.0.0.1). A backup of the file is saved first, and your other settings and hooks are left alone.',
+  });
+  if (response !== 0) return;
+  try {
+    const result = installed ? hooksInstaller.uninstallHooks() : hooksInstaller.installHooks(config.hooksPort);
+    if (result.backupPath) console.log('[hooks] settings backup saved to', result.backupPath);
+  } catch (err) {
+    dialog.showErrorBox('Claude Pet', `Could not update Claude Code settings: ${err.message}`);
+  }
+  refreshTrayMenu();
+}
+
 function greetIfFirstToday() {
   if (!shouldGreet(config.lastGreetDate)) return;
   if (!playEvent('greet')) return;
@@ -211,6 +257,7 @@ function computePetState(now = Date.now()) {
     petIdleMs: statsOpen || drag ? 0 : now - lastInteraction,
     loungeAfterMs: config.loungeAfterMinutes * 60_000,
     awayAfterMs: config.sleepWhenAwayMinutes * 60_000,
+    activity: activity.summary(),
   });
 }
 
@@ -515,6 +562,7 @@ function trayIcon() {
 }
 
 function buildMenu() {
+  const hooks = hooksStatus();
   return Menu.buildFromTemplate([
     { label: 'Show usage stats', click: showStatsFromMenu },
     { label: petWin?.isVisible() ? 'Hide pet' : 'Show pet', accelerator: config.hideHotkey, registerAccelerator: false, click: toggleVisible },
@@ -522,6 +570,11 @@ function buildMenu() {
     { label: 'Open Claude usage page', click: () => shell.openExternal(USAGE_PAGE) },
     { type: 'separator' },
     { label: 'Launch at startup', type: 'checkbox', checked: !!config.launchAtStartup, click: (item) => setLaunchAtStartup(item.checked) },
+    {
+      label: hooks === 'installed' ? 'Disconnect from Claude Code…' : 'Connect to Claude Code…',
+      enabled: hooks !== 'unreadable',
+      click: toggleHooks,
+    },
     { label: 'Open settings file', click: () => shell.openPath(configPath(userDataDir())) },
     { type: 'separator' },
     { label: 'Quit Claude Pet', click: quitWithGoodbye },
@@ -638,7 +691,7 @@ function scheduleSnapshot() {
       console.log('[snapshot] panel bounds', JSON.stringify(panelWin.getBounds()), 'visible', panelWin.isVisible());
     }
     app.quit();
-  }, 6500);
+  }, args.snapshotDelay);
 }
 
 app.whenReady().then(async () => {
@@ -656,6 +709,9 @@ app.whenReady().then(async () => {
     fakeUsagePath: args.fakeUsage,
   });
   usage.on('update', handleUsageUpdate);
+
+  activity = new ClaudeActivity({ celebrateAfterMs: config.celebrateAfterSeconds * 1000 });
+  if (!args.snapshot || args.debugHooks) startHookServer({ port: config.hooksPort, onEvent: handleHookEvent });
 
   createPetWindow();
   updateFacing();
