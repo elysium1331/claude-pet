@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  DEFAULTS, sanitizeConfig, loadConfig, saveConfigChanges, configPath, isPlainFolderName,
+  DEFAULTS, sanitizeConfig, loadConfig, saveConfigChanges, configPath, isPlainFolderName, loginItemAtLaunch,
 } = require('../src/main/config');
 
 function tempDir(t) {
@@ -138,4 +138,19 @@ test('saveConfigChanges recreates a deleted file', (t) => {
   const dir = tempDir(t);
   saveConfigChanges(dir, { palette: 2 });
   assert.deepEqual(readFile(dir), { palette: 2 });
+});
+
+test('loginItemAtLaunch leaves the startup entry alone unless config.json really says what it should be', (t) => {
+  const dir = tempDir(t);
+  const load = (content) => {
+    fs.writeFileSync(configPath(dir), content);
+    return loadConfig(dir);
+  };
+  assert.equal(loginItemAtLaunch(load(JSON.stringify({ launchAtStartup: true }))), true);
+  assert.equal(loginItemAtLaunch(load(JSON.stringify({ launchAtStartup: false }))), false);
+  assert.equal(loginItemAtLaunch(load('{}')), false); // the default, from a readable file
+  // a trailing comma must not remove an entry the file still asks for
+  assert.equal(loginItemAtLaunch(load('{"launchAtStartup": true,}')), null);
+  assert.equal(loginItemAtLaunch(load(JSON.stringify({ launchAtStartup: 'yes' }))), null);
+  assert.equal(loginItemAtLaunch(load(JSON.stringify({ launchAtStartup: true, pollMinutes: 0 }))), true);
 });

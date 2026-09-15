@@ -11,6 +11,10 @@ const FIDGET_MAX_MS = 60_000;
 const INSET_MAX = 0.95;
 const SIDES = ['top', 'right', 'bottom', 'left'];
 const TIMING_KEYS = ['disappearMs', 'goodbyeMs', 'statsMergeMs'];
+const QUIT_FALLBACK_MS = 2 * TIMING_MAX_MS + 2000; // quit even if the goodbye animation never finishes
+const OBJECT_BINDINGS = ['usageProperties', 'usageColorProperties']; // { session, weekly, model } names
+// Sent to the pet file as they are; other reactions go through an event that may pick from a list.
+const DIRECT_REACTIONS = ['wake', 'appear', 'disappear'];
 
 const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const isText = (v) => typeof v === 'string' && v !== '';
@@ -65,18 +69,31 @@ function sanitizeManifest(manifest) {
   optional('maxGrowth', (v) => Number.isInteger(v) && v >= 0, 'a whole number of at least 0');
   optional('palettes', isTextList, 'a list of names');
   optional('trayIcon', isFileName, 'the name of an image file in the pet folder');
-  optional(
-    'binding',
-    (v) => isPlainObject(v) && Object.values(v).every((b) => isText(b) || (isPlainObject(b) && Object.values(b).every(isText))),
-    'an object of view-model property names',
-    (v) => structuredClone(v),
-  );
-  optional(
-    'reactions',
-    (v) => isPlainObject(v) && Object.values(v).every((r) => isText(r) || (isTextList(r) && r.length > 0)),
-    'an object of trigger names (or lists of them)',
-    (v) => structuredClone(v),
-  );
+  // The renderer hands binding and reaction names straight to the Rive view model, and Rive swallows the throw a
+  // wrong shape causes there, which silently breaks the pet. So each key is checked for the shape it is used with.
+  const entries = (key, check) => {
+    if (manifest[key] === undefined) return;
+    if (!isPlainObject(manifest[key])) {
+      problems.push(`"${key}" should be an object`);
+      return;
+    }
+    const before = problems.length;
+    for (const [name, value] of Object.entries(manifest[key])) {
+      const expect = check(name, value);
+      if (expect) problems.push(`"${key}.${name}" should be ${expect}`);
+    }
+    if (problems.length === before) pet[key] = structuredClone(manifest[key]);
+  };
+  entries('binding', (name, value) => {
+    if (OBJECT_BINDINGS.includes(name)) {
+      return isPlainObject(value) && Object.values(value).every(isText) ? null : 'an object of view-model property names';
+    }
+    return isText(value) ? null : 'a view-model property name';
+  });
+  entries('reactions', (name, value) => {
+    if (DIRECT_REACTIONS.includes(name)) return isText(value) ? null : 'one trigger name';
+    return isText(value) || (isTextList(value) && value.length > 0) ? null : 'a trigger name or a list of them';
+  });
   optional(
     'fidgets',
     (v) => Array.isArray(v) && v.every((f) => isPlainObject(f) && isText(f.trigger) && Number.isFinite(f.ms)
@@ -141,6 +158,24 @@ function loadPetOrFallback(name, { roots, fallback }) {
   }
 }
 
+// The renderer couldn't draw the pet: 'fallback' swaps a custom pet for the built-in one; when that isn't possible,
+// 'ignoreMouse' (once) stops the invisible window from catching clicks; otherwise 'none'.
+function petDrawFailurePlan({
+  folder, fallback, alreadyFailed, fallbackBroken = false,
+}) {
+  if (folder !== fallback && !fallbackBroken) return 'fallback';
+  return alreadyFailed ? 'none' : 'ignoreMouse';
+}
+
+// Delays for quitting: wave, then fade, then quit; fallbackMs quits anyway if those timers never get there.
+function goodbyePlan(timings, { waved, fades }) {
+  return {
+    waveMs: waved ? timings.goodbyeMs || 0 : 0,
+    fadeMs: fades ? timings.disappearMs || 0 : 0,
+    fallbackMs: QUIT_FALLBACK_MS,
+  };
+}
+
 module.exports = {
-  TIMING_MAX_MS, sanitizeManifest, loadPetPack, loadPetOrFallback,
+  TIMING_MAX_MS, sanitizeManifest, loadPetPack, loadPetOrFallback, petDrawFailurePlan, goodbyePlan,
 };

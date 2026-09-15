@@ -85,6 +85,11 @@ function resizeAnchored(pos, oldSize, newSize) {
   };
 }
 
+// Settling in place happens after every pose change, so only a real move needs to be written to config.json.
+function positionChanged(saved, pos) {
+  return !!pos && !(saved && saved.x === pos.x && saved.y === pos.y);
+}
+
 module.exports = {
-  ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored,
+  ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
 };

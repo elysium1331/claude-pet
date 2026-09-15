@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored,
+  clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
 } = require('../src/main/placement');
 
 test('scaledPetSize scales the pet box and keeps the scale sensible', () => {
@@ -79,4 +79,11 @@ test('panelPlacement flips below when there is no room above, and stays inside t
   const placed = panelPlacement({ petPos: { x: -15, y: 10 }, petSize, insets, panelSize, workArea, gap: 4, margin: 8 });
   // body bottom = 10 + 128 = 138; below y = 142; x clamps to margin 8
   assert.deepEqual(placed, { x: 8, y: 142, side: 'below' });
+});
+
+test('positionChanged asks for a save only when the pet really moved', () => {
+  assert.equal(positionChanged(null, { x: 10, y: 20 }), true);
+  assert.equal(positionChanged({ x: 10, y: 20 }, { x: 10, y: 20 }), false);
+  assert.equal(positionChanged({ x: 10, y: 20 }, { x: 11, y: 20 }), true);
+  assert.equal(positionChanged({ x: 10, y: 20 }, null), false);
 });

@@ -6,17 +6,20 @@ const {
   powerMonitor, dialog,
 } = require('electron');
 const {
-  DEFAULTS, loadConfig, saveConfigChanges, configPath,
+  DEFAULTS, loadConfig, saveConfigChanges, configPath, loginItemAtLaunch,
 } = require('./config');
-const { readJsonFile, writeJsonAtomic, keepBrokenCopy } = require('./json-file');
-const { TIMING_MAX_MS, loadPetPack, loadPetOrFallback } = require('./pet-pack');
+const {
+  loadPetPack, loadPetOrFallback, petDrawFailurePlan, goodbyePlan,
+} = require('./pet-pack');
+const { openLifeStore } = require('./pet-life-store');
+const { logStrayErrors, startGuarded, guarded: guardWith } = require('./error-guard');
 const { resolveServedFile } = require('./served-files');
 const { defaultCredentialsPath } = require('./claude-auth');
 const { UsageService } = require('./usage-service');
 const { isClaudeRunning } = require('./claude-process');
 const { levelFor, colorForPercent, choosePetState, formatReset, formatCountdown, formatAgo } = require('./usage-parse');
 const {
-  clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored,
+  clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
 } = require('./placement');
 const {
   restingPose, insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey, shouldGreet,
@@ -33,7 +36,6 @@ const {
 
 const ROOT = path.join(__dirname, '..', '..'); // inside app.asar (read-only) in the installed build
 const DEFAULT_PET = DEFAULTS.pet;
-const QUIT_FALLBACK_MS = 2 * TIMING_MAX_MS + 2000; // quit even if the goodbye animation never finishes
 const POSITION_SAVE_DELAY_MS = 1000;
 const LOG_MAX_BYTES = 512 * 1024;
 const PET_SIZE = { width: 150, height: 160 }; // updated in place when the size setting changes
@@ -69,9 +71,7 @@ if (!args.snapshot && !app.requestSingleInstanceLock()) {
   app.quit();
 }
 
-// Without these, Electron shows a blocking error box for any stray throw, which freezes the pet and its hook listener.
-process.on('uncaughtException', (err) => logError('uncaught exception', err));
-process.on('unhandledRejection', (reason) => logError('unhandled promise rejection', reason));
+logStrayErrors(process, logError);
 
 let petWin = null;
 let panelWin = null;
@@ -109,6 +109,7 @@ let quitting = false;
 
 let appTimers = [];
 let life = null;
+let lifeStore = null;
 let lifeSaveTimer = null;
 let configWritable = true; // false when config.json couldn't be read: never save over it that session
 let positionSaveTimer = null;
@@ -175,16 +176,8 @@ function logError(context, err) {
   }
 }
 
-// Wraps timer and event callbacks so one bad value can't take down the loop that calls them.
 function guarded(context, fn) {
-  return (...fnArgs) => {
-    try {
-      return fn(...fnArgs);
-    } catch (err) {
-      logError(context, err);
-      return undefined;
-    }
-  };
+  return guardWith(logError, context, fn);
 }
 
 // Not awaited, so the pet keeps running while it is open.
@@ -226,7 +219,9 @@ function serveAppFiles() {
 // either (no WebGL2, for example), the invisible window stops catching clicks and usage stays in the tray.
 function handlePetLoadFailure(message) {
   logError(`drawing the pet "${pet.folder}"`, message);
-  if (pet.folder !== DEFAULT_PET) {
+  const situation = { folder: pet.folder, fallback: DEFAULT_PET, alreadyFailed: petDrawFailed };
+  let plan = petDrawFailurePlan(situation);
+  if (plan === 'fallback') {
     const failed = pet.folder;
     try {
       pet = loadPetPack(DEFAULT_PET, petRoots().filter((root) => root.builtIn));
@@ -238,9 +233,10 @@ function handlePetLoadFailure(message) {
       return;
     } catch (err) {
       logError('loading the built-in pet', err);
+      plan = petDrawFailurePlan({ ...situation, fallbackBroken: true });
     }
   }
-  if (petDrawFailed) return;
+  if (plan !== 'ignoreMouse') return;
   petDrawFailed = true;
   petWin.setIgnoreMouseEvents(true);
   showNotice(
@@ -256,27 +252,16 @@ function lifePath() {
 }
 
 function loadLife(notices) {
-  const file = lifePath();
-  const read = readJsonFile(file);
-  if (read.status === 'ok') return petLife.sanitizeLife(read.value);
-  if (read.status === 'invalid') {
-    // keep the damaged file instead of silently saving a brand-new pet over it
-    try {
-      const copy = keepBrokenCopy(file);
-      notices.push(`Your pet's progress file was damaged, so it starts fresh. The old file was kept as ${copy}.`);
-    } catch (err) {
-      logError('keeping the damaged pet-life.json', err);
-    }
-  } else if (read.status === 'unreadable') {
-    logError('reading pet-life.json', read.error);
-  }
-  return petLife.newLife();
+  lifeStore = openLifeStore(lifePath());
+  if (lifeStore.error) logError('reading pet-life.json', lifeStore.error);
+  if (lifeStore.notice) notices.push(lifeStore.notice);
+  return lifeStore.life;
 }
 
 function saveLife() {
-  if (args.snapshot || !life) return;
+  if (args.snapshot || !life || !lifeStore) return;
   try {
-    writeJsonAtomic(lifePath(), life);
+    lifeStore.save(life);
   } catch (err) {
     console.warn('[life] could not save:', err.message);
   }
@@ -834,9 +819,7 @@ function movePet(pos, workArea = workAreaAt(petCenter(pos))) {
 
 // Runs after every settle, which Claude Code activity triggers often: write only real moves, at most once a second.
 function savePetPosition() {
-  if (args.snapshot || !petPos) return;
-  const saved = config.petPosition;
-  if (saved && saved.x === petPos.x && saved.y === petPos.y) return;
+  if (args.snapshot || !positionChanged(config.petPosition, petPos)) return;
   config.petPosition = { ...petPos };
   clearTimeout(positionSaveTimer);
   positionSaveTimer = setTimeout(flushPetPosition, POSITION_SAVE_DELAY_MS);
@@ -1057,13 +1040,13 @@ function quitWithGoodbye() {
   closeStats();
   const waved = playEvent('goodbye');
   quitting = true;
-  const waveMs = waved ? pet.timings.goodbyeMs || 0 : 0;
-  const fades = petWin?.isVisible() && pet.reactions?.disappear;
+  const fades = !!(petWin?.isVisible() && pet.reactions?.disappear);
+  const plan = goodbyePlan(pet.timings, { waved, fades });
   setTimeout(() => {
     if (fades) sendReaction(pet.reactions.disappear);
-    setTimeout(() => app.quit(), fades ? pet.timings.disappearMs : 0);
-  }, waveMs);
-  setTimeout(() => app.quit(), QUIT_FALLBACK_MS);
+    setTimeout(() => app.quit(), plan.fadeMs);
+  }, plan.waveMs);
+  setTimeout(() => app.quit(), plan.fallbackMs);
 }
 
 function windowAlive(win) {
@@ -1409,7 +1392,7 @@ async function startApp() {
   createTray();
   const hotkeyNotice = registerHotkey();
   if (hotkeyNotice) notices.push(hotkeyNotice);
-  syncLoginItem();
+  if (loginItemAtLaunch(loaded) !== null) syncLoginItem(); // otherwise config holds defaults, not the user's choice
 
   // Taskbar moved, resolution changed or a monitor was unplugged: keep the pet on screen.
   const reclamp = guarded('keeping the pet on screen', () => {
@@ -1429,7 +1412,7 @@ async function startApp() {
   if (notices.length) showNotice('Claude Pet started, but some things need your attention.', notices.join('\n\n'));
 }
 
-// A half-started app would hold the single-instance lock with no window or tray, so every relaunch would do nothing.
+// Exits, so the single-instance lock is released (see startGuarded).
 function failStartup(err) {
   logError('startup', err);
   if (!args.snapshot) {
@@ -1442,7 +1425,7 @@ function failStartup(err) {
   app.exit(1);
 }
 
-app.whenReady().then(startApp).catch(failStartup);
+startGuarded(app.whenReady(), startApp, failStartup);
 
 app.on('before-quit', stopTimers);
 app.on('second-instance', () => windowAlive(petWin) && showPet());

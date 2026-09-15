@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  TIMING_MAX_MS, sanitizeManifest, loadPetPack, loadPetOrFallback,
+  TIMING_MAX_MS, sanitizeManifest, loadPetPack, loadPetOrFallback, petDrawFailurePlan, goodbyePlan,
 } = require('../src/main/pet-pack');
 const { fidgetsFor, insetsForState, resolveState } = require('../src/main/behavior');
 
@@ -39,14 +39,66 @@ test('sanitizeManifest rejects malformed fields that would throw in the app, nam
     [{ ...minimal, bodyInsets: { right: { top: 0.1 } } }, /"bodyInsets"/], // missing the left bounds
     [{ ...minimal, bodyInsets: { top: '0.1' } }, /"bodyInsets"/],
     [{ ...minimal, stateInsets: { lounging: { top: 2 } } }, /"stateInsets"/],
-    [{ ...minimal, reactions: { wake: 5 } }, /"reactions"/],
-    [{ ...minimal, binding: { stateProperty: ['state'] } }, /"binding"/],
+    [{ ...minimal, reactions: { wake: 5 } }, /"reactions\.wake"/],
+    [{ ...minimal, reactions: [] }, /"reactions"/],
+    [{ ...minimal, binding: { stateProperty: ['state'] } }, /"binding\.stateProperty"/],
+    [{ ...minimal, binding: 'state' }, /"binding"/],
     [{ ...minimal, trayIcon: '..\\secret.png' }, /"trayIcon"/],
     [{ ...minimal, timings: { goodbyeMs: 'soon' } }, /timings\.goodbyeMs/],
     [null, /object/],
   ];
   for (const [manifest, message] of cases) assert.throws(() => sanitizeManifest(manifest), message, JSON.stringify(manifest));
   assert.throws(() => sanitizeManifest({ fidgets: {} }), (err) => /"file"/.test(err.message) && /"states"/.test(err.message) && /"fidgets"/.test(err.message));
+});
+
+test('binding keys must have the shape the renderer uses: names, or objects of names for the orbs', () => {
+  const binding = {
+    stateProperty: 'state',
+    usageProperties: { session: 'session', model: 'fable' },
+    usageColorProperties: { weekly: 'weeklyColor' },
+    someFutureProperty: 'future',
+  };
+  assert.deepEqual(sanitizeManifest({ ...minimal, binding }).binding, binding);
+  const bad = [
+    [{ stateProperty: { a: 'b' } }, 'stateProperty'],
+    [{ lookXProperty: 3 }, 'lookXProperty'],
+    [{ earLeftProperty: '' }, 'earLeftProperty'],
+    [{ someFutureProperty: { a: 'b' } }, 'someFutureProperty'],
+    [{ usageProperties: 'session' }, 'usageProperties'],
+    [{ usageColorProperties: { session: ['a'] } }, 'usageColorProperties'],
+  ];
+  for (const [value, key] of bad) {
+    assert.throws(() => sanitizeManifest({ ...minimal, binding: value }), new RegExp(`"binding\\.${key}"`), key);
+  }
+});
+
+test('only reactions picked through events may be lists; ones sent straight to the pet must be one name', () => {
+  const reactions = { tricks: ['trickSpin', 'trickFlip'], roamPause: ['sniff'], greet: 'greet', wake: 'perkUp' };
+  assert.deepEqual(sanitizeManifest({ ...minimal, reactions }).reactions, reactions);
+  for (const key of ['wake', 'appear', 'disappear']) {
+    assert.throws(() => sanitizeManifest({ ...minimal, reactions: { [key]: [key, 'sparkle'] } }), new RegExp(`"reactions\\.${key}"`), key);
+  }
+  assert.throws(() => sanitizeManifest({ ...minimal, reactions: { tricks: [] } }), /"reactions\.tricks"/);
+  assert.throws(() => sanitizeManifest({ ...minimal, reactions: { tricks: ['spin', 4] } }), /"reactions\.tricks"/);
+});
+
+test('petDrawFailurePlan swaps a custom pet for the built-in one, then stops catching clicks once', () => {
+  const plan = (options) => petDrawFailurePlan({ fallback: 'celestial-fox', alreadyFailed: false, ...options });
+  assert.equal(plan({ folder: 'my-owl' }), 'fallback');
+  assert.equal(plan({ folder: 'my-owl', fallbackBroken: true }), 'ignoreMouse');
+  assert.equal(plan({ folder: 'celestial-fox' }), 'ignoreMouse');
+  assert.equal(plan({ folder: 'celestial-fox', alreadyFailed: true }), 'none');
+  assert.equal(plan({ folder: 'my-owl', fallbackBroken: true, alreadyFailed: true }), 'none');
+});
+
+test('goodbyePlan quits after the wave and fade, and the fallback outlasts the longest goodbye a pack can ask for', () => {
+  const { timings } = sanitizeManifest({ ...minimal, timings: { goodbyeMs: 1e9, disappearMs: 1e9 } });
+  const longest = goodbyePlan(timings, { waved: true, fades: true });
+  assert.deepEqual({ waveMs: longest.waveMs, fadeMs: longest.fadeMs }, { waveMs: TIMING_MAX_MS, fadeMs: TIMING_MAX_MS });
+  assert.ok(longest.fallbackMs > longest.waveMs + longest.fadeMs);
+  const quiet = goodbyePlan(timings, { waved: false, fades: false });
+  assert.deepEqual({ waveMs: quiet.waveMs, fadeMs: quiet.fadeMs }, { waveMs: 0, fadeMs: 0 });
+  assert.equal(quiet.fallbackMs, longest.fallbackMs);
 });
 
 test('sanitizeManifest clamps timings so a pack cannot stall hiding or quitting', () => {

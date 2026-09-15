@@ -135,7 +135,7 @@ If the chosen pet is missing, its `pet.json` has a mistake, or its Rive file can
 - `usageProperties`: Numbers (0–100) for the orbs. Leave any out if your pet has no meters; the chips under the pet always show the numbers.
 - `lightBackdropProperty`: an optional Boolean.
 - Optional extras: `usageColorProperties` (Colors for the orb rings), `statsOpenProperty` / `statsSideProperty`, `hoveredProperty`, `lookXProperty` / `lookYProperty` (gaze, -1..1).
-- `reactions`: view-model Trigger names for `wake`, `appear` and `disappear`; `fidgets`: `{ "trigger", "ms", "states" }` entries played at random while idle (or in the listed states).
+- `reactions`: view-model Trigger names for `wake`, `appear` and `disappear` (one name each); event reactions such as `tricks` may list several names to take turns. `fidgets`: `{ "trigger", "ms", "states" }` entries played at random while idle (or in the listed states).
 - `bodyInsets` / `stateInsets`: how much of the pet box is transparent margin on each side (fractions from 0 to 0.95), overall and per pose, so the body stays on screen. Pets that really turn can give `{ "left": {...}, "right": {...} }` with both directions.
 - `timings`: `disappearMs`, `goodbyeMs` and `statsMergeMs` in milliseconds; anything above 5000 is treated as 5000.
 

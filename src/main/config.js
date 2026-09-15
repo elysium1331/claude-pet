@@ -167,6 +167,13 @@ function saveConfigChanges(dir, changes) {
   writeJsonAtomic(file, { ...current, ...changes }, { pretty: true });
 }
 
+// Whether the OS startup entry should be on at launch, from loadConfig's result. null means leave it as it is:
+// when config.json (or its launchAtStartup) couldn't be used, the default false would remove an entry the file asks for.
+function loginItemAtLaunch(loaded) {
+  if (!loaded.writable || loaded.problems.some((p) => p.key === 'launchAtStartup')) return null;
+  return !!loaded.config.launchAtStartup;
+}
+
 module.exports = {
-  DEFAULTS, sanitizeConfig, loadConfig, saveConfigChanges, configPath, isPlainFolderName,
+  DEFAULTS, sanitizeConfig, loadConfig, saveConfigChanges, configPath, isPlainFolderName, loginItemAtLaunch,
 };
