@@ -51,6 +51,12 @@ function usageEvents(prev, next) {
   return [];
 }
 
+// True when any meter went up between two usage checks: Claude was used somewhere (chat, Code, anything on the plan).
+function usageRose(prev, next) {
+  if (!prev || !next) return false;
+  return meterPairs(prev, next).some(([a, b]) => Math.round(b.percent) > Math.round(a.percent));
+}
+
 function localDateKey(date = new Date()) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -100,6 +106,7 @@ module.exports = {
   fidgetsFor,
   lookFromCursor,
   usageEvents,
+  usageRose,
   localDateKey,
   shouldGreet,
 };

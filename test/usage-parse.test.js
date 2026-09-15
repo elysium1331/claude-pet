@@ -106,6 +106,10 @@ test('choosePetState lounges when left alone, sleeps when you are away, and flag
   assert.equal(choosePetState({ ...base, petIdleMs: 999_000, claudeQuietMs: 30_000 }), 'lounging');
   assert.equal(choosePetState({ ...base, petIdleMs: 60_000, claudeQuietMs: 999_000 }), 'idle');
 
+  // usage went up recently (e.g. a Claude chat): stays perked up for a few minutes instead of chilling
+  assert.equal(choosePetState({ ...base, petIdleMs: 999_000, usageQuietMs: 60_000 }), 'idle');
+  assert.equal(choosePetState({ ...base, petIdleMs: 999_000, usageQuietMs: 180_000 }), 'lounging');
+
   // worry beats lounging so a near-limit warning is never hidden
   const high = parseUsage({ limits: [{ kind: 'weekly_all', percent: 88 }] });
   assert.equal(choosePetState({ ...base, usage: high, petIdleMs: 999_000 }), 'lowUsage');

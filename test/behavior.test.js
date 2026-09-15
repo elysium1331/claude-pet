@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, shouldGreet, restingPose, isNightTime,
-  resolveState,
+  resolveState, usageRose,
 } = require('../src/main/behavior');
 
 test('resolveState falls back to the closest pose a pet file actually has', () => {
@@ -98,6 +98,15 @@ test('usageEvents spots a limit resetting and a limit being hit', () => {
   assert.deepEqual(usageEvents(meters(90, 99, 60), meters(2, 100, 60)), ['usageReset']);
   // small drops (rounding / data wobble) are not a reset
   assert.deepEqual(usageEvents(meters(30, 40, 50), meters(22, 40, 50)), []);
+});
+
+test('usageRose notices Claude being used anywhere (chat included) from usage going up', () => {
+  assert.equal(usageRose(null, meters(10, 20, 30)), false); // first check: nothing to compare
+  assert.equal(usageRose(meters(10, 20, 30), meters(10, 20, 30)), false);
+  assert.equal(usageRose(meters(10, 20, 30), meters(11, 20, 30)), true);
+  assert.equal(usageRose(meters(10, 20, 30), meters(10, 20, 31)), true);
+  assert.equal(usageRose(meters(80, 20, 30), meters(2, 21, 30)), true); // weekly still rose
+  assert.equal(usageRose(meters(80, 20, 30), meters(2, 20, 30)), false); // a reset alone isn't use
 });
 
 test('shouldGreet says hello once per day', () => {

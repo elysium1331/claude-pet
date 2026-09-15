@@ -15,7 +15,7 @@ const {
 } = require('./placement');
 const {
   restingPose, insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey, shouldGreet,
-  isNightTime, resolveState,
+  isNightTime, resolveState, usageRose,
 } = require('./behavior');
 const { ClaudeActivity } = require('./claude-activity');
 const { startHookServer } = require('./hook-server');
@@ -82,6 +82,7 @@ let lastInteraction = Date.now();
 let lastInteractionReason = 'startup';
 let lastClaudeEventAt = 0;
 let lastClaudeEvent = null;
+let lastUsageRiseAt = 0;
 let nextFidgetAt = 0;
 let lastViewPush = 0;
 let lastLook = { x: 0, y: 0 };
@@ -307,6 +308,7 @@ function playEvent(eventName) {
 
 function handleUsageUpdate() {
   if (usage.snapshot.status === 'ok') {
+    if (usageRose(lastGoodUsage, usage.snapshot.usage)) lastUsageRiseAt = Date.now(); // Claude used somewhere: perk up
     usageEvents(lastGoodUsage, usage.snapshot.usage).forEach(playEvent);
     lastGoodUsage = usage.snapshot.usage;
   }
@@ -387,6 +389,7 @@ function statusSnapshot() {
     lastDisturbedBy: lastInteractionReason,
     secondsSinceClaudeEvent: lastClaudeEventAt ? Math.round((now - lastClaudeEventAt) / 1000) : null,
     lastClaudeEvent,
+    secondsSinceUsageRose: lastUsageRiseAt ? Math.round((now - lastUsageRiseAt) / 1000) : null,
     loungesAfterSeconds: config.loungeAfterMinutes * 60,
     secondsSinceKeyboardOrMouse: powerMonitor.getSystemIdleTime(),
     claudeAppRunning: claudeRunning,
@@ -410,6 +413,7 @@ function computePetState(now = Date.now()) {
     awayAfterMs: config.sleepWhenAwayMinutes * 60_000,
     activity: activity.summary(),
     claudeQuietMs: now - lastClaudeEventAt,
+    usageQuietMs: now - lastUsageRiseAt,
   });
 }
 

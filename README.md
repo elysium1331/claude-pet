@@ -11,7 +11,7 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 - Sits on your taskbar (bottom-left by default). Drag it anywhere; it stays on screen and snaps back onto the taskbar when you drop it near it.
 - The three orbs orbiting the pet are your meters: one dot = session, two = weekly, three = your per-model weekly limit (e.g. Fable). Their rings fill and turn amber, then red, as you use more.
 - Click the pet to open the full stats: percentages, bars, reset times and countdowns. Click again, or anywhere else, to close.
-- Left alone for a few minutes, it drifts down to the taskbar and lounges. It sleeps when you're away from the computer or the Claude app isn't running, and checks usage less often while it naps.
+- Left alone for a few minutes with Claude quiet, it drifts down to the taskbar and lounges. When Claude gets busy it perks up: Claude Code shows its working poses right away, and other use like Claude chat (noticed when your usage goes up) keeps it awake and attentive for a few minutes. It sleeps when you're away from the computer or the Claude app isn't running, and checks usage less often while it naps.
 - Gets worried near your limits, sighs and gets tired when one is hit, and celebrates when a limit resets (the orbs drain and refill).
 - Waves hello once a day, looks for a connection if it can't read your usage, and waves goodbye when you quit.
 

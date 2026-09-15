@@ -105,6 +105,8 @@ function choosePetState({
   activity = null, // Claude Code: 'waiting' | 'busy' | 'thinking' | null
   claudeQuietMs = Infinity, // time since the last Claude Code event
   loungeGraceMs = 30_000, // after Claude goes quiet, wait this long before lying back down
+  usageQuietMs = Infinity, // time since usage last went up (catches Claude chat, which sends no hooks)
+  perkWindowMs = 180_000, // after usage goes up, stay perked up this long
 }) {
   if (activity === 'waiting') return 'needsAttention';
   if (!claudeRunning && !activity) return 'sleeping';
@@ -115,7 +117,7 @@ function choosePetState({
   if (userAwayMs >= awayAfterMs) return 'sleeping';
   if (needsLogin) return 'disconnected';
   if (worst >= warnAt) return 'lowUsage';
-  if (petIdleMs >= loungeAfterMs && claudeQuietMs >= loungeGraceMs) return 'lounging';
+  if (petIdleMs >= loungeAfterMs && claudeQuietMs >= loungeGraceMs && usageQuietMs >= perkWindowMs) return 'lounging';
   return 'idle';
 }
 
