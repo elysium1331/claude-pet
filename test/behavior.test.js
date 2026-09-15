@@ -33,6 +33,9 @@ test('restingPose sits on the taskbar instead of floating, when the pet can sit'
   assert.equal(restingPose(sitter, 'idle', false), 'idle');
   assert.equal(restingPose(sitter, 'lowUsage', true), 'lowUsage');
   assert.equal(restingPose({ states: { idle: 0 } }, 'idle', true), 'idle');
+  // the user can prefer floating (normal size) on the taskbar
+  assert.equal(restingPose(sitter, 'idle', true, 'float'), 'idle');
+  assert.equal(restingPose(sitter, 'idle', true, 'sit'), 'sitting');
 });
 
 const pet = {

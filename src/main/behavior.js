@@ -85,9 +85,10 @@ function isNightTime(now, startHour, endHour) {
     : hour >= startHour || hour < endHour;
 }
 
-// On the taskbar with nothing going on, a pet that can sit sits instead of floating.
-function restingPose(pet, state, grounded) {
-  return state === 'idle' && grounded && 'sitting' in (pet.states || {}) ? 'sitting' : state;
+// On the taskbar with nothing going on, a pet that can sit sits instead of floating (unless you prefer it floating).
+function restingPose(pet, state, grounded, taskbarPose = 'sit') {
+  const sits = taskbarPose === 'sit' && 'sitting' in (pet.states || {});
+  return state === 'idle' && grounded && sits ? 'sitting' : state;
 }
 
 module.exports = {

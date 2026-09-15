@@ -22,6 +22,9 @@ const DEFAULTS = {
   credentialsPath: null, // null = ~/.claude/.credentials.json
   scopedLimit: null, // which per-model weekly limit drives the third orb; null = first one reported
   lightBackdrop: 'auto', // true | false | 'auto' (follow the Windows light/dark setting)
+  petScale: 1, // 0.8 small, 1 normal, 1.25 large, 1.5 extra large
+  taskbarPose: 'float', // 'float' keeps its normal size on the taskbar; 'sit' sits (more compact)
+  ambientMotion: true, // random ear twitches and tail drift, if the pet supports them
   palette: 0, // color theme index, if the pet has themes
   nightMode: 'auto', // true | false | 'auto' (softer glow between nightStartHour and nightEndHour)
   nightStartHour: 22,

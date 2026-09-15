@@ -116,10 +116,38 @@ function applyPet() {
   setBoolean(vm, binding.statsOpenProperty, stats.open);
 }
 
-// Eases the gaze toward the latest cursor direction so the eyes glide instead of jumping.
+const ambient = window.PetAmbient ? window.PetAmbient.createAmbient() : null;
+const CALM_STATES = new Set(['sleeping']);
+const numberSupport = {};
+
+// Checks once whether the pet file has a Number property, so missing ones aren't looked up every frame.
+function hasNumber(vm, name) {
+  if (!name) return false;
+  if (!(name in numberSupport)) numberSupport[name] = !!vm.number(name);
+  return numberSupport[name];
+}
+
+function stepAmbient(vm) {
+  const binding = petConfig.binding || {};
+  const names = [binding.earLeftProperty, binding.earRightProperty, binding.tailSwayProperty];
+  if (!ambient || !lastView?.ambientMotion || !names.some((n) => hasNumber(vm, n))) return;
+  ambient.setCalm(CALM_STATES.has(lastView.petState) || held.held);
+  const motion = ambient.step(performance.now());
+  const round = (v) => Math.round(v * 1000) / 1000;
+  if (hasNumber(vm, names[0])) setNumber(vm, names[0], round(motion.earLeft));
+  if (hasNumber(vm, names[1])) setNumber(vm, names[1], round(motion.earRight));
+  if (hasNumber(vm, names[2])) setNumber(vm, names[2], round(motion.tailSway));
+}
+
+window.addEventListener('resize', () => {
+  if (riveReady) riveInstance.resizeDrawingSurfaceToCanvas(); // pet size changed
+});
+
+// Eases the gaze toward the latest cursor direction so the eyes glide instead of jumping; also drives ambient motion.
 function smoothLook() {
   const vm = viewModel();
   if (vm) {
+    stepAmbient(vm);
     const binding = petConfig.binding || {};
     const nextX = look.x + (look.targetX - look.x) * LOOK_SMOOTHING;
     const nextY = look.y + (look.targetY - look.y) * LOOK_SMOOTHING;

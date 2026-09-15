@@ -1,6 +1,23 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { clampPet, panelPlacement, chooseFacing, mirrorInsets } = require('../src/main/placement');
+const {
+  clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored,
+} = require('../src/main/placement');
+
+test('scaledPetSize scales the pet box and keeps the scale sensible', () => {
+  assert.deepEqual(scaledPetSize(1), { width: 150, height: 160 });
+  assert.deepEqual(scaledPetSize(1.25), { width: 188, height: 200 });
+  assert.deepEqual(scaledPetSize(0.8), { width: 120, height: 128 });
+  assert.deepEqual(scaledPetSize(9), scaledPetSize(2));
+  assert.deepEqual(scaledPetSize('nonsense'), { width: 150, height: 160 });
+});
+
+test('resizeAnchored keeps the bottom center in place so the pet stays on the taskbar', () => {
+  const before = { x: 100, y: 900 };
+  const after = resizeAnchored(before, { width: 150, height: 160 }, { width: 188, height: 200 });
+  assert.deepEqual(after, { x: 81, y: 860 });
+  // bottom center unchanged: 100+75 = 81+94, 900+160 = 860+200
+});
 
 // 1920x1080 display with a 48px taskbar at the bottom.
 const workArea = { x: 0, y: 0, width: 1920, height: 1032 };

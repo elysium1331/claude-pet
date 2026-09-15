@@ -28,7 +28,10 @@
     "growthProperty": "growth",
     "paletteProperty": "palette",
     "nightModeProperty": "nightMode",
-    "facingProperty": "facing"
+    "facingProperty": "facing",
+    "earLeftProperty": "earLeft",
+    "earRightProperty": "earRight",
+    "tailSwayProperty": "tailSway"
   },
   "maxGrowth": 3,
   "palettes": ["Celestial blue", "Rose gold", "Mint aqua", "Violet silver"],

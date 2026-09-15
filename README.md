@@ -87,6 +87,9 @@ Right-click the pet or the tray icon and choose **Open settings file**. Restart 
 | `launchAtStartup` | `false` | Also toggleable from the tray menu |
 | `claudeProcessNames` | `["claude.exe", "claude"]` | Processes that count as "Claude is running" |
 | `scopedLimit` | `null` | Which per-model weekly limit to show (e.g. `"Fable"`); `null` = first one reported |
+| `petScale` | `1` | Pet size: `0.8`, `1`, `1.25` or `1.5` (also in right-click → Appearance → Size) |
+| `taskbarPose` | `"float"` | On the taskbar: `"float"` keeps its normal size, `"sit"` sits (more compact) |
+| `ambientMotion` | `true` | Random ear twitches and tail drift (if the pet supports them) |
 | `palette` | `0` | Color theme (also in right-click → Appearance) |
 | `nightMode` | `"auto"` | Softer night glow: `true`, `false`, or `"auto"` (between `nightStartHour` and `nightEndHour`, default 22–7) |
 | `lightBackdrop` | `"auto"` | Stronger outline for light desktops: `true`, `false`, or `"auto"` (follows Windows theme) |

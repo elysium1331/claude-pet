@@ -69,4 +69,22 @@ function mirrorInsets(insets, flipped) {
   return { ...insets, left: insets.right, right: insets.left };
 }
 
-module.exports = { ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets };
+const BASE_PET_SIZE = { width: 150, height: 160 };
+
+function scaledPetSize(scale) {
+  const s = Number(scale);
+  const safe = Number.isFinite(s) ? Math.min(2, Math.max(0.6, s)) : 1;
+  return { width: Math.round(BASE_PET_SIZE.width * safe), height: Math.round(BASE_PET_SIZE.height * safe) };
+}
+
+// New top-left for a resized pet box that keeps its bottom center where it was (so it stays on the taskbar).
+function resizeAnchored(pos, oldSize, newSize) {
+  return {
+    x: Math.round(pos.x + (oldSize.width - newSize.width) / 2),
+    y: Math.round(pos.y + (oldSize.height - newSize.height)),
+  };
+}
+
+module.exports = {
+  ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored,
+};

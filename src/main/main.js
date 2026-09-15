@@ -10,7 +10,9 @@ const { defaultCredentialsPath } = require('./claude-auth');
 const { UsageService } = require('./usage-service');
 const { isClaudeRunning } = require('./claude-process');
 const { levelFor, colorForPercent, choosePetState, formatReset, formatCountdown, formatAgo } = require('./usage-parse');
-const { ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets } = require('./placement');
+const {
+  ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored,
+} = require('./placement');
 const {
   restingPose, insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey, shouldGreet,
   isNightTime, resolveState,
@@ -24,7 +26,8 @@ const { shouldStartRoam, planRoam, stepToward, roamDelayMs } = require('./roam')
 
 const ROOT = path.join(__dirname, '..', '..');
 const SERVED_DIRS = ['src/renderer', 'node_modules/@rive-app/webgl2', 'pets'].map((d) => path.join(ROOT, d) + path.sep);
-const PET_SIZE = { width: 150, height: 160 };
+const PET_SIZE = { width: 150, height: 160 }; // updated in place when the size setting changes
+const SIZE_OPTIONS = [['Small', 0.8], ['Normal', 1], ['Large', 1.25], ['Extra large', 1.5]];
 const PANEL_PAD = 14; // transparent room around the stats card for its shadow (matches panel.css)
 const SNAP_PX = 28;
 const USAGE_PAGE = 'https://claude.ai/settings/usage';
@@ -109,6 +112,7 @@ function parseArgs(argv) {
     palette: get('palette'), // force a color theme for screenshots
     night: get('night'), // 'true' | 'false' to force night glow
     roamNow: argv.includes('--roam-now'), // start a free-roam trip right after launch
+    scale: get('scale'), // override the pet size for screenshots
     startAt: startAt?.length === 2 && startAt.every(Number.isFinite) ? { x: startAt[0], y: startAt[1] } : null,
   };
 }
@@ -189,6 +193,23 @@ function nightModeOn(now = new Date()) {
   return !!config.nightMode;
 }
 
+function setPetScale(scale) {
+  const oldSize = { ...PET_SIZE };
+  Object.assign(PET_SIZE, scaledPetSize(scale));
+  config.petScale = scale;
+  if (!args.snapshot) saveConfig(userDataDir(), config);
+  closeStats();
+  cancelGlide();
+  setPetBounds(resizeAnchored(petPos, oldSize, PET_SIZE));
+  settlePet();
+  refreshTrayMenu();
+}
+
+function setTaskbarPose(pose) {
+  setAppearance('taskbarPose', pose);
+  tick();
+}
+
 function setAppearance(key, value) {
   config[key] = value;
   if (!args.snapshot) saveConfig(userDataDir(), config);
@@ -246,6 +267,7 @@ function buildView() {
     updatedAgo: formatAgo(fetchedAt, now),
     claudeRunning,
     lightBackdrop: config.lightBackdrop === 'auto' ? !nativeTheme.shouldUseDarkColors : !!config.lightBackdrop,
+    ambientMotion: config.ambientMotion !== false,
   };
 }
 
@@ -386,7 +408,7 @@ function tick() {
     if (Math.round(life.happiness) !== before) pushView();
   }
 
-  const next = restingPose(pet, computePetState(now), grounded);
+  const next = restingPose(pet, computePetState(now), grounded, config.taskbarPose);
   if (next !== petState) {
     sendReaction(wakeReaction(pet, petState, next));
     petState = next;
@@ -936,6 +958,21 @@ function buildMenu() {
     {
       label: 'Appearance',
       submenu: [
+        {
+          label: 'Size',
+          submenu: SIZE_OPTIONS.map(([label, scale]) => ({
+            label, type: 'radio', checked: Number(config.petScale) === scale, click: () => setPetScale(scale),
+          })),
+        },
+        {
+          label: 'On the taskbar',
+          submenu: [
+            { label: 'Float (normal size)', type: 'radio', checked: config.taskbarPose !== 'sit', click: () => setTaskbarPose('float') },
+            { label: 'Sit', type: 'radio', checked: config.taskbarPose === 'sit', click: () => setTaskbarPose('sit') },
+          ],
+        },
+        { label: 'Ear and tail twitches', type: 'checkbox', checked: config.ambientMotion !== false, click: (item) => setAppearance('ambientMotion', item.checked) },
+        { type: 'separator' },
         ...(pet.palettes || []).map((name, i) => ({
           label: name, type: 'radio', checked: Number(config.palette) === i, click: () => setAppearance('palette', i),
         })),
@@ -1110,6 +1147,7 @@ app.whenReady().then(async () => {
   pet = loadPet(config.pet);
   life = loadLife();
   displayedGrowth = life.level;
+  Object.assign(PET_SIZE, scaledPetSize(args.scale ?? config.petScale));
   serveAppFiles();
   registerIpc();
 
