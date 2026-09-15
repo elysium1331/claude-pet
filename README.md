@@ -74,13 +74,14 @@ Right-click the pet or the tray icon and choose **Connect to Claude Code…**. T
 - **Done:** celebrates when a longer task finishes
 - **Oops:** flinches when a tool fails
 
-This adds hooks to Claude Code's user settings: `settings.json` in `%USERPROFILE%\.claude`, or in `CLAUDE_CONFIG_DIR` if you set it. Each hook uses `curl`, which comes with Windows 10 and 11, to send the event to the pet at `127.0.0.1:47821` on your own computer. Nothing leaves your machine.
+This adds hooks to Claude Code's user settings: `settings.json` in `%USERPROFILE%\.claude`, or in `CLAUDE_CONFIG_DIR` if you set it. Each hook uses `curl`, which comes with Windows 10 and 11, to send the event to the pet at `127.0.0.1:47821` on your own computer, never through a proxy. Nothing leaves your machine.
 
 - The hooks run in the background. Claude Code doesn't wait for them and ignores any reply, so no program listening on that port can approve a tool or change what Claude does. If the pet isn't running, Claude Code simply carries on.
+- While the pet isn't running, Claude Code still sends each event, including your prompts and what tools read and write, to `127.0.0.1:47821`, where any other program using that port could read it. If the pet won't be running, turn on **Launch at startup** or choose **Disconnect from Claude Code…**.
 - Every event carries a random token that only your Windows account can read, kept in `%APPDATA%\claude-pet\hooks-token.json`. The pet ignores events without it, so other programs and other accounts on the same PC can't fake them.
 - Before changing the file, the pet saves a copy of it as `settings.json.claude-pet-backup` next to it. There is only ever one backup, replaced each time. Your other settings and hooks are left alone, and a symlinked settings file stays a link.
-- If another program is already using the port, the pet tells you and won't connect. Set `hooksPort` to a free port and restart the pet.
-- Hooks added by an older version of Claude Pet, or pointing at an old port, are updated automatically when the pet starts. Claude Code sessions that were already open may need a restart to pick up the change.
+- If another program is already using the port, the pet tells you, won't connect and never moves its hooks there. Hooks that were already sending that program your events gave it the token, so the pet makes a new one, which the hooks get once the pet has its port again. Set `hooksPort` to a free port and restart the pet.
+- Hooks added by an older version of Claude Pet, or pointing at an old port, are updated automatically when the pet starts and has its port. Claude Code sessions that were already open may need a restart to pick up the change.
 - Choose **Disconnect from Claude Code…** to remove the hooks again. Uninstalling Claude Pet removes them too.
 - If the pet doesn't react, right-click → **Copy troubleshooting info** copies what the pet thinks is going on to the clipboard: whether it's listening, whether the hooks are installed, and what each Claude Code session is doing.
 

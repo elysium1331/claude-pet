@@ -36,14 +36,26 @@ function isPetHook(hook) {
 
 // Claude Code pipes the event JSON to this command, doesn't wait for it (async) and ignores what it prints, so
 // whatever answers on the port can't approve a tool or add to Claude's context. Every part is checked, since it is
-// run by a shell.
+// run by a shell. --noproxy: curl otherwise sends even 127.0.0.1 requests through HTTP_PROXY, off this computer.
 function hookCommand(event, { port, token, platform = process.platform }) {
   if (!/^[A-Za-z]+$/.test(event)) throw new Error(`Unexpected hook event name: ${event}`);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Unexpected hooks port: ${port}`);
   if (!isValidToken(token)) throw new Error('The hooks token must be letters and digits only.');
   const discard = platform === 'win32' ? 'NUL' : '/dev/null';
-  return `curl -s -m 2 -o ${discard} -H "Content-Type: application/json" -H "${TOKEN_HEADER}: ${token}" `
+  return `curl -s -m 2 --noproxy 127.0.0.1 -o ${discard} -H "Content-Type: application/json" -H "${TOKEN_HEADER}: ${token}" `
     + `--data-binary @- http://127.0.0.1:${port}${MARKER}${event}`;
+}
+
+// Where an installed pet hook (either form) sends its events, and whether Claude Code would act on the reply.
+function hookTarget(hook) {
+  const value = String(hook.command ?? hook.url);
+  const port = /\/\/(?:127\.0\.0\.1|localhost):(\d+)\/claude-pet\/hook\//.exec(value);
+  const token = new RegExp(`${TOKEN_HEADER}: ([A-Za-z0-9]+)`).exec(value);
+  return {
+    port: port ? Number(port[1]) : null,
+    token: token ? token[1] : null,
+    replyIgnored: hook.type === 'command' && hook.async === true,
+  };
 }
 
 function petHook(event, options) {
@@ -82,21 +94,26 @@ function addPetHooks(settings, options) {
   return next;
 }
 
-function petHookEntries(settings) {
-  const entries = [];
+function installedPetHooks(settings) {
+  const found = [];
   for (const [event, groups] of Object.entries(isPlainObject(settings?.hooks) ? settings.hooks : {})) {
     for (const group of Array.isArray(groups) ? groups : []) {
       for (const hook of Array.isArray(group?.hooks) ? group.hooks : []) {
-        if (!isPetHook(hook)) continue;
-        entries.push(JSON.stringify([event, group.matcher ?? null, hook.type, hook.command ?? hook.url, hook.async ?? null, hook.timeout ?? null]));
+        if (isPetHook(hook)) found.push({ event, group, hook });
       }
     }
   }
-  return entries.sort();
+  return found;
+}
+
+function petHookEntries(settings) {
+  return installedPetHooks(settings)
+    .map(({ event, group, hook }) => JSON.stringify([event, group.matcher ?? null, hook.type, hook.command ?? hook.url, hook.async ?? null, hook.timeout ?? null]))
+    .sort();
 }
 
 function hasPetHooks(settings) {
-  return petHookEntries(settings).length > 0;
+  return installedPetHooks(settings).length > 0;
 }
 
 // 'missing' | 'current' | 'outdated' (HTTP hooks from an older version, another port or token, or other events).
@@ -105,6 +122,19 @@ function hooksState(settings, options) {
   if (!found.length) return 'missing';
   const wanted = petHookEntries(addPetHooks({}, options));
   return found.length === wanted.length && found.every((entry, i) => entry === wanted[i]) ? 'current' : 'outdated';
+}
+
+// { state, samePort, replyUsed, sendsToken }: whether every pet hook already sends to options.port, whether any is
+// one whose reply Claude Code acts on (the HTTP hooks of older versions), and whether any sends options.token to
+// options.port.
+function hooksDetails(settings, options) {
+  const targets = installedPetHooks(settings).map(({ hook }) => hookTarget(hook));
+  return {
+    state: hooksState(settings, options),
+    samePort: targets.length > 0 && targets.every((t) => t.port === options.port),
+    replyUsed: targets.some((t) => !t.replyIgnored),
+    sendsToken: targets.some((t) => t.port === options.port && t.token === options.token),
+  };
 }
 
 function readSettings(file) {
@@ -177,12 +207,12 @@ function uninstallHooks({ file = settingsPath() } = {}) {
   return { changed: true, ...writeSettings(removePetHooks(settings), exists, file) };
 }
 
-// { state: 'missing' | 'current' | 'outdated' | 'unreadable', error }
+// { state: 'missing' | 'current' | 'outdated' | 'unreadable', error, samePort, replyUsed, sendsToken }
 function readHooksState({ file = settingsPath(), ...options }) {
   try {
-    return { state: hooksState(readSettings(file).settings, options), error: null };
+    return { ...hooksDetails(readSettings(file).settings, options), error: null };
   } catch (err) {
-    return { state: 'unreadable', error: err.message };
+    return { state: 'unreadable', error: err.message, samePort: false, replyUsed: false, sendsToken: false };
   }
 }
 
@@ -196,6 +226,7 @@ module.exports = {
   removePetHooks,
   hasPetHooks,
   hooksState,
+  hooksDetails,
   installHooks,
   upgradeHooks,
   uninstallHooks,

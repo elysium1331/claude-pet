@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  addPetHooks, removePetHooks, hasPetHooks, isPetHook, hooksState, hookCommand, installHooks, upgradeHooks,
+  addPetHooks, removePetHooks, hasPetHooks, isPetHook, hooksState, hooksDetails, hookCommand, installHooks, upgradeHooks,
   uninstallHooks, readHooksState, HOOK_EVENTS, BACKUP_SUFFIX,
 } = require('../src/main/hooks-installer');
 
@@ -54,7 +54,7 @@ test('pet hooks are async command hooks that pipe the event to curl and discard 
     assert.equal(petHooks.length, 1, event);
     assert.deepEqual(petHooks[0], {
       type: 'command',
-      command: `curl -s -m 2 -o NUL -H "Content-Type: application/json" -H "X-Claude-Pet-Token: ${TOKEN}" --data-binary @- http://127.0.0.1:47821/claude-pet/hook/${event}`,
+      command: `curl -s -m 2 --noproxy 127.0.0.1 -o NUL -H "Content-Type: application/json" -H "X-Claude-Pet-Token: ${TOKEN}" --data-binary @- http://127.0.0.1:47821/claude-pet/hook/${event}`,
       async: true,
       timeout: 5,
     });
@@ -72,7 +72,7 @@ test('idle prompts reach the pet, so interrupted turns can end', () => {
 });
 
 test('the command discards output to /dev/null outside Windows', () => {
-  assert.match(hookCommand('Stop', { ...options, platform: 'linux' }), /^curl -s -m 2 -o \/dev\/null -H /);
+  assert.match(hookCommand('Stop', { ...options, platform: 'linux' }), /^curl -s -m 2 --noproxy 127\.0\.0\.1 -o \/dev\/null -H /);
 });
 
 test('hookCommand refuses anything that is not safe inside a shell command', () => {
@@ -107,6 +107,30 @@ test('hooksState tells missing, current and outdated hooks apart', () => {
   const oneMissing = addPetHooks(existing, options);
   delete oneMissing.hooks.SessionEnd;
   assert.equal(hooksState(oneMissing, options), 'outdated');
+  // command hooks from before --noproxy, which a proxy setting could send off the computer
+  const beforeNoProxy = addPetHooks(existing, options);
+  for (const group of Object.values(beforeNoProxy.hooks).flat()) {
+    for (const hook of group.hooks) if (isPetHook(hook)) hook.command = hook.command.replace(' --noproxy 127.0.0.1', '');
+  }
+  assert.equal(hooksState(beforeNoProxy, options), 'outdated');
+});
+
+test('hooksDetails tells where the hooks send events, with what token, and whether Claude Code reads the reply', () => {
+  assert.deepEqual(hooksDetails(existing, options), { state: 'missing', samePort: false, replyUsed: false, sendsToken: false });
+  assert.deepEqual(hooksDetails(addPetHooks(existing, options), options), { state: 'current', samePort: true, replyUsed: false, sendsToken: true });
+  assert.deepEqual(hooksDetails(oldHttpHooks(existing), options), { state: 'outdated', samePort: true, replyUsed: true, sendsToken: false });
+  assert.deepEqual(hooksDetails(oldHttpHooks(existing, 50000), options), { state: 'outdated', samePort: false, replyUsed: true, sendsToken: false });
+  assert.deepEqual(
+    hooksDetails(addPetHooks(existing, { ...options, port: 50000 }), options),
+    { state: 'outdated', samePort: false, replyUsed: false, sendsToken: false },
+  );
+  assert.deepEqual(
+    hooksDetails(addPetHooks(existing, { ...options, token: 'z'.repeat(40) }), options),
+    { state: 'outdated', samePort: true, replyUsed: false, sendsToken: false },
+  );
+  const mixed = addPetHooks(oldHttpHooks({}, 50000), options);
+  mixed.hooks.Stop.push({ hooks: [{ type: 'http', url: 'http://127.0.0.1:50000/claude-pet/hook/Stop' }] });
+  assert.equal(hooksDetails(mixed, options).samePort, false);
 });
 
 test('addPetHooks refuses settings whose hooks section it does not understand', () => {
@@ -191,6 +215,24 @@ test('a hard-linked settings file stays linked to the real file', (t) => {
   assert.equal(hooksState(readJson(real), options), 'current');
   fs.writeFileSync(real, JSON.stringify({ edited: true }));
   assert.deepEqual(readJson(file), { edited: true });
+});
+
+// Runs without the rights real symlinks need: settings.json "resolves" to a file in another folder.
+test('a linked settings file is written where the link points, without replacing the link', (t) => {
+  const { file } = tempSettings(t, existing);
+  const { file: real } = tempSettings(t, { ...existing, model: 'sonnet' });
+  const { realpathSync, renameSync } = fs;
+  t.mock.method(fs, 'realpathSync', (p, ...rest) => (p === file ? real : realpathSync(p, ...rest)));
+  const renames = [];
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    renames.push([from, to]);
+    return renameSync(from, to);
+  });
+  installHooks({ ...options, file });
+  assert.equal(hooksState(readJson(real), options), 'current');
+  assert.deepEqual(readJson(file), existing); // the link itself is left as it was
+  assert.deepEqual(renames, [[`${real}.claude-pet.tmp`, real]]);
+  assert.deepEqual(readJson(`${file}${BACKUP_SUFFIX}`), { ...existing, model: 'sonnet' }); // a copy of the real file
 });
 
 test('a symlinked settings file is written through the link', (t) => {

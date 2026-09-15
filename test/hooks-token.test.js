@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  loadHookToken, tokenMatches, tokenPath, isValidToken,
+  loadHookToken, renewHookToken, tokenMatches, tokenPath, isValidToken,
 } = require('../src/main/hooks-token');
 
 function tempDir(t) {
@@ -17,8 +17,9 @@ test('loadHookToken creates a letters-and-digits token once and then keeps it', 
   const dir = tempDir(t);
   const first = loadHookToken(dir);
   assert.equal(first.error, null);
+  assert.equal(first.persisted, true);
   assert.match(first.token, /^[A-Za-z0-9]{64}$/);
-  assert.equal(loadHookToken(dir).token, first.token);
+  assert.deepEqual(loadHookToken(dir), { token: first.token, persisted: true, error: null });
   assert.deepEqual(JSON.parse(fs.readFileSync(tokenPath(dir), 'utf8')), { token: first.token });
 });
 
@@ -26,20 +27,42 @@ test('a damaged or hand-edited token file gets a fresh token', (t) => {
   const dir = tempDir(t);
   for (const content of ['{ nope', '{"token":"has spaces & quotes\\""}', '{"token":"short"}', 'null']) {
     fs.writeFileSync(tokenPath(dir), content);
-    const { token, error } = loadHookToken(dir);
+    const { token, persisted, error } = loadHookToken(dir);
     assert.equal(error, null);
+    assert.equal(persisted, true);
     assert.ok(isValidToken(token), content);
     assert.equal(loadHookToken(dir).token, token, content);
   }
 });
 
-test('a token that cannot be saved is still returned, with the error', (t) => {
+test('a token that cannot be saved is still returned, with the error, and marked as not saved', (t) => {
   const dir = tempDir(t);
   const blocked = path.join(dir, 'not-a-folder');
   fs.writeFileSync(blocked, 'a file where the settings folder should be');
-  const { token, error } = loadHookToken(blocked);
+  const { token, persisted, error } = loadHookToken(blocked);
   assert.ok(isValidToken(token));
+  assert.equal(persisted, false);
   assert.ok(error);
+});
+
+test('a token file that exists but cannot be read is left alone, and the stand-in token is marked as not saved', (t) => {
+  const dir = tempDir(t);
+  fs.mkdirSync(tokenPath(dir)); // reading a folder fails the way a locked file does
+  const { token, persisted, error } = loadHookToken(dir);
+  assert.ok(isValidToken(token));
+  assert.equal(persisted, false);
+  assert.match(error.message, /could not be read/);
+  assert.equal(fs.statSync(tokenPath(dir)).isDirectory(), true);
+});
+
+test('renewHookToken saves a different token that later launches use', (t) => {
+  const dir = tempDir(t);
+  const first = loadHookToken(dir);
+  const renewed = renewHookToken(dir);
+  assert.equal(renewed.persisted, true);
+  assert.ok(isValidToken(renewed.token));
+  assert.notEqual(renewed.token, first.token);
+  assert.equal(loadHookToken(dir).token, renewed.token);
 });
 
 test('tokenMatches accepts only the exact token', () => {

@@ -16,20 +16,32 @@ function isValidToken(value) {
   return typeof value === 'string' && TOKEN_PATTERN.test(value);
 }
 
-// Returns { token, error }. A token that couldn't be saved still works this session; the hooks follow the new
-// token on the next launch.
+function saveNewToken(file, randomBytes) {
+  const token = randomBytes(32).toString('hex');
+  try {
+    writeJsonAtomic(file, { token }, { mode: 0o600 });
+    return { token, persisted: true, error: null };
+  } catch (err) {
+    return { token, persisted: false, error: err };
+  }
+}
+
+// Returns { token, persisted, error }. A token that isn't the saved one (the file couldn't be read or saved) still
+// works for this session, but must never be written into Claude Code's settings: the next launch would use another.
 function loadHookToken(dir, { randomBytes = crypto.randomBytes } = {}) {
   const file = tokenPath(dir);
   const read = readJsonFile(file);
-  if (read.status === 'ok' && isValidToken(read.value?.token)) return { token: read.value.token, error: null };
-  const token = randomBytes(32).toString('hex');
-  if (read.status === 'unreadable') return { token, error: new Error(`${file} could not be read (${read.error})`) };
-  try {
-    writeJsonAtomic(file, { token }, { mode: 0o600 });
-    return { token, error: null };
-  } catch (err) {
-    return { token, error: err };
+  if (read.status === 'ok' && isValidToken(read.value?.token)) return { token: read.value.token, persisted: true, error: null };
+  if (read.status === 'unreadable') {
+    // Not replaced: the file may hold the token the installed hooks send, and only be locked for a moment.
+    return { token: randomBytes(32).toString('hex'), persisted: false, error: new Error(`${file} could not be read (${read.error})`) };
   }
+  return saveNewToken(file, randomBytes);
+}
+
+// For when another program may have seen the token. Returns { token, persisted, error }.
+function renewHookToken(dir, { randomBytes = crypto.randomBytes } = {}) {
+  return saveNewToken(tokenPath(dir), randomBytes);
 }
 
 // Compares hashes so the time taken says nothing about how much of a guess was right.
@@ -39,4 +51,4 @@ function tokenMatches(expected, given) {
   return crypto.timingSafeEqual(hash(expected), hash(given));
 }
 
-module.exports = { TOKEN_HEADER, tokenPath, isValidToken, loadHookToken, tokenMatches };
+module.exports = { TOKEN_HEADER, tokenPath, isValidToken, loadHookToken, renewHookToken, tokenMatches };

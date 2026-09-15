@@ -30,7 +30,8 @@ const {
 const { ClaudeActivity } = require('./claude-activity');
 const { startHookServer } = require('./hook-server');
 const hooksInstaller = require('./hooks-installer');
-const { loadHookToken } = require('./hooks-token');
+const { loadHookToken, renewHookToken, tokenPath } = require('./hooks-token');
+const hooksPlan = require('./hooks-plan');
 const { classifyClicks, StrokeDetector, edgeBump } = require('./gestures');
 const petLife = require('./pet-life');
 const {
@@ -86,6 +87,7 @@ let usage = null;
 let activity = null;
 let claudeRunning = true;
 let hookToken = null;
+let hookTokenSaved = false; // the token is the one in hooks-token.json, so it may go into Claude Code's settings
 let hookServer = null;
 let hookListener = { state: 'off', error: null }; // 'off' | 'starting' | 'listening' | 'failed'
 
@@ -453,16 +455,24 @@ function listeningForHooks() {
 }
 
 function portProblem(installed) {
-  const port = config.hooksPort;
-  const reason = hookListener.error === 'EADDRINUSE' ? 'another program is using it' : `it can't be used (${hookListener.error})`;
-  return {
-    message: `Claude Pet can't receive Claude Code events on port ${port}: ${reason}.`,
-    detail: installed
-      ? `Claude Code is still set up to send its events to port ${port}, where that program gets them instead of the pet. `
-        + 'Choose Disconnect from Claude Code… to stop that, or set hooksPort in the settings file to a free port '
-        + '(1024–65535) and restart Claude Pet, which moves its hooks to the new port.'
-      : 'Set hooksPort in the settings file to a free port (1024–65535), restart Claude Pet, then connect again.',
-  };
+  return hooksPlan.portProblem({ port: config.hooksPort, error: hookListener.error, installed });
+}
+
+function showTokenProblem() {
+  const problem = hooksPlan.tokenProblem({ file: tokenPath(userDataDir()) });
+  showNotice(problem.message, problem.detail);
+}
+
+// Another program held the port while the hooks were sending it the token, so the token isn't trusted any more.
+// Claude Code's settings keep the old one until the pet next gets its port, when the hooks are upgraded to the new one.
+function renewExposedHookToken() {
+  const renewed = renewHookToken(userDataDir());
+  if (!renewed.persisted) {
+    logError('replacing the Claude Code hooks token', renewed.error);
+    return;
+  }
+  hookToken = renewed.token;
+  hookTokenSaved = true;
 }
 
 function startHookListener() {
@@ -483,13 +493,13 @@ function startHookListener() {
 }
 
 // Once the port is ours (or not): brings hooks from older versions (HTTP hooks, another port or token) up to date,
-// and speaks up if Claude Code is sending events to a port someone else holds.
+// and speaks up if Claude Code is sending events to a port someone else holds. The rules are in hooks-plan.js.
 function listenerSettled({ ok, error }) {
   hookListener = ok ? { state: 'listening', error: null } : { state: 'failed', error: error?.code || error?.message || String(error) };
   if (!ok) logError(`listening for Claude Code on port ${config.hooksPort}`, error);
   if (quitting) return;
-  const { state } = hooksStatus();
-  if (state === 'outdated') {
+  const plan = hooksPlan.startupHooksPlan({ ok, hooks: hooksStatus(), tokenSaved: hookTokenSaved });
+  if (plan.upgrade) {
     try {
       const result = hooksInstaller.upgradeHooks(hookOptions());
       if (result.backupPath) console.log('[hooks] updated; settings backup saved to', result.backupPath);
@@ -498,25 +508,32 @@ function listenerSettled({ ok, error }) {
       showNotice("Claude Pet couldn't update its Claude Code hooks.", `${err.message}\n\nChoose Disconnect from Claude Code… and connect again to retry.`);
     }
   }
-  if (!ok && (state === 'current' || state === 'outdated')) {
+  if (plan.renewToken) renewExposedHookToken();
+  if (plan.notice === 'portProblem') {
     const problem = portProblem(true);
     showNotice(problem.message, problem.detail);
   }
+  if (plan.notice === 'tokenProblem') showTokenProblem();
   refreshTrayMenu();
 }
 
 async function toggleHooks() {
   const { state, error } = hooksStatus();
-  if (state === 'unreadable') {
+  const action = hooksPlan.hooksAction({ state, listening: listeningForHooks(), tokenSaved: hookTokenSaved });
+  if (action === 'unreadable') {
     showNotice("Claude Pet can't read Claude Code's settings, so it can't connect or disconnect.", error, 'error');
     return;
   }
-  const installed = state !== 'missing';
-  if (!installed && !listeningForHooks()) {
+  if (action === 'portProblem') {
     const problem = portProblem(false);
     showNotice(problem.message, problem.detail);
     return;
   }
+  if (action === 'tokenProblem') {
+    showTokenProblem();
+    return;
+  }
+  const installed = action === 'remove';
   const { response } = await dialog.showMessageBox({
     type: 'question',
     buttons: [installed ? 'Remove hooks' : 'Install hooks', 'Cancel'],
@@ -1203,7 +1220,7 @@ function lifeSummary() {
 }
 
 function buildMenu() {
-  const hooks = hooksStatus().state;
+  const hooks = hooksPlan.hooksMenu({ state: hooksStatus().state, listenerState: hookListener.state, port: config.hooksPort });
   const awake = petWin?.isVisible() && displayState() !== 'sleeping';
   return Menu.buildFromTemplate([
     { label: 'Show usage stats', click: showStatsFromMenu },
@@ -1257,14 +1274,8 @@ function buildMenu() {
     { label: 'Open Claude usage page', click: () => shell.openExternal(USAGE_PAGE) },
     { type: 'separator' },
     { label: 'Launch at startup', type: 'checkbox', checked: !!config.launchAtStartup, click: (item) => setLaunchAtStartup(item.checked) },
-    ...(hookListener.state === 'failed'
-      ? [{ label: `Claude Code events can't reach the pet (port ${config.hooksPort} is unavailable)`, enabled: false }]
-      : []),
-    {
-      // Unreadable settings keep the item enabled: clicking it explains what is wrong.
-      label: hooks === 'current' || hooks === 'outdated' ? 'Disconnect from Claude Code…' : 'Connect to Claude Code…',
-      click: toggleHooks,
-    },
+    ...(hooks.problem ? [hooks.problem] : []),
+    { ...hooks.toggle, click: toggleHooks },
     { label: 'Open settings file', click: () => shell.openPath(configPath(userDataDir())) },
     { label: 'Copy troubleshooting info', click: copyTroubleshootingInfo },
     { type: 'separator' },
@@ -1492,7 +1503,8 @@ async function startApp() {
   activity = new ClaudeActivity({ celebrateAfterMs: config.celebrateAfterSeconds * 1000 });
   const loadedToken = loadHookToken(userDataDir());
   hookToken = loadedToken.token;
-  if (loadedToken.error) logError('saving the Claude Code hooks token', loadedToken.error);
+  hookTokenSaved = loadedToken.persisted;
+  if (loadedToken.error) logError('loading the Claude Code hooks token', loadedToken.error);
   if (!args.snapshot || args.debugHooks) startHookListener();
 
   createPetWindow();
