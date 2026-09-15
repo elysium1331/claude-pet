@@ -23,9 +23,10 @@ const {
 const {
   clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
 } = require('./placement');
+const { pointerPlan } = require('./click-through');
 const {
-  restingPose, insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey, shouldGreet,
-  isNightTime, resolveState, usageRose,
+  restingPose, insetsForState, gotUp, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey,
+  shouldGreet, isNightTime, resolveState, usageRose,
 } = require('./behavior');
 const { ClaudeActivity } = require('./claude-activity');
 const { startHookServer } = require('./hook-server');
@@ -57,6 +58,7 @@ const CHASE_STEP_PX = 14;
 const BONK_COOLDOWN_MS = 1500;
 const ROAM_STEP_MS = 30;
 const ROAM_OK_STATES = new Set(['idle', 'sitting', 'lounging']);
+const GREET_DELAY_MS = 2500; // lets the appear sparkle or the wake-up hop finish before waving hello
 
 const args = parseArgs(process.argv);
 
@@ -99,6 +101,11 @@ let glide = null;
 let chase = null;
 let roam = null;
 let nextRoamAt = 0;
+let pressed = false; // a press on the pet is under way (the renderer reports when it starts and ends)
+const pointer = { clickThrough: null, overBody: false, hovered: false }; // what the pet window was last set to
+let hiding = false; // the disappear animation is playing; the window hides when it ends
+let hideTimer = null;
+let greetAt = 0; // when to try the daily greeting (0: not until the pet is shown or gets up)
 
 let statsOpen = false;
 let panelSize = { width: 212, height: 180 };
@@ -399,6 +406,7 @@ function pushView() {
     const summary = view.meters.map((m) => `${m.label} ${m.percent}%`).join(' · ');
     tray.setToolTip(`Claude Pet${summary ? ` — ${summary}` : ''}`.slice(0, 127));
   }
+  updatePointer(); // a new pose or facing moves the body within the box
 }
 
 function sendReaction(name) {
@@ -413,7 +421,7 @@ function sendHeld(held, lean = 0) {
 function playEvent(eventName) {
   let trigger = pet.reactions?.[eventName];
   if (Array.isArray(trigger)) trigger = trigger[nextTrick++ % trigger.length];
-  if (!trigger || !petWin?.isVisible() || displayState() === 'sleeping') return false;
+  if (!trigger || !petVisible() || displayState() === 'sleeping') return false;
   sendReaction(trigger);
   nextFidgetAt = Math.max(nextFidgetAt, Date.now() + 10_000);
   return true;
@@ -626,7 +634,7 @@ function statusSnapshot() {
     grounded,
     statsOpen,
     roaming: !!roam,
-    visible: windowAlive(petWin) && petWin.isVisible(),
+    visible: petVisible(),
   };
 }
 
@@ -648,7 +656,7 @@ function computePetState(now = Date.now()) {
 
 function maybeFidget(now) {
   if (now < nextFidgetAt) return;
-  const options = config.fidgets && !statsOpen && !drag && !chase && !roam && petWin.isVisible() ? fidgetsFor(pet, displayState()) : [];
+  const options = config.fidgets && !statsOpen && !drag && !chase && !roam && petVisible() ? fidgetsFor(pet, displayState()) : [];
   if (!options.length) {
     nextFidgetAt = now + 5000;
     return;
@@ -677,7 +685,9 @@ function tick() {
 
   const next = restingPose(pet, computePetState(now), grounded, config.taskbarPose);
   if (next !== petState) {
-    sendReaction(wakeReaction(pet, petState, next));
+    // A hidden window doesn't animate: a hop sent now would play, and reset the pose, whenever it's shown again.
+    if (petVisible()) sendReaction(wakeReaction(pet, petState, next));
+    if (gotUp(petState, next)) greetAt = now + GREET_DELAY_MS; // a pet that started asleep says hello once it's up
     petState = next;
     pushView();
     if (!chase && !drag && !roam) {
@@ -696,10 +706,14 @@ function tick() {
     now,
     nextRoamAt,
     state: petState,
-    busy: statsOpen || !!drag || !!chase || !petWin.isVisible(),
+    busy: statsOpen || !!drag || !!chase || !petVisible(),
     petIdleMs: now - lastInteraction,
   })) {
     startRoam();
+  }
+  if (greetAt && now >= greetAt) {
+    greetAt = 0;
+    greetIfFirstToday(); // skipped while asleep or hidden; tried again when the pet gets up or is shown
   }
   maybeFidget(now);
 }
@@ -740,7 +754,7 @@ function feedPet() {
 }
 
 function startChase() {
-  if (chase || !petWin.isVisible() || displayState() === 'sleeping') return;
+  if (chase || !petVisible() || displayState() === 'sleeping') return;
   if (roam) cancelRoam({ returnHome: false });
   closeStats();
   cancelGlide();
@@ -798,7 +812,7 @@ function roamPose() {
 }
 
 function startRoam() {
-  if (roam || chase || drag || !windowAlive(petWin) || !petWin.isVisible()) return;
+  if (roam || chase || drag || !petVisible()) return;
   closeStats();
   cancelGlide();
   const workArea = workAreaAt(petCenter());
@@ -932,6 +946,7 @@ function setPetBounds(pos) {
   petPos = { x: pos.x, y: pos.y };
   petWin.setBounds({ ...petPos, ...PET_SIZE }); // setBounds keeps transparent windows from growing on scaled displays
   if (statsOpen) placePanel();
+  updatePointer(); // the body may have moved under, or away from, a cursor that stayed still
 }
 
 function movePet(pos, workArea = workAreaAt(petCenter(pos))) {
@@ -1020,6 +1035,16 @@ function glideToGround() {
   });
 }
 
+// Ends a drag whose release will never reach the pet (it was hidden, or a menu took the mouse): it stays where it is.
+function cancelDrag() {
+  pressed = false;
+  if (!drag) return;
+  drag = null;
+  sendHeld(false);
+  updateFacing();
+  settlePet();
+}
+
 // ---------- windows ----------
 
 function baseWindowOptions() {
@@ -1054,10 +1079,20 @@ function createPetWindow() {
   petWin.setAlwaysOnTop(true, 'floating');
   petWin.once('ready-to-show', () => {
     petWin.showInactive();
-    setTimeout(greetIfFirstToday, 2500); // after the appear sparkle
+    greetAt = Date.now() + GREET_DELAY_MS;
+  });
+  // Alt+F4 on the focused pet would destroy its window while the app keeps running in the tray: hide it instead.
+  petWin.on('close', (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    hidePet();
   });
   petWin.on('blur', closeStats); // clicking anywhere else closes the stats
-  petWin.webContents.on('did-finish-load', pushView);
+  petWin.webContents.on('did-finish-load', () => {
+    pressed = false; // a freshly loaded page has no press under way and isn't showing a hover
+    pointer.hovered = false;
+    pushView();
+  });
   petWin.loadURL('app://bundle/src/renderer/pet.html');
 }
 
@@ -1074,6 +1109,7 @@ function createPanelWindow() {
 }
 
 function placePanel() {
+  if (!windowAlive(panelWin)) return 'above';
   const size = { width: panelSize.width + PANEL_PAD * 2, height: panelSize.height + PANEL_PAD * 2 };
   const placed = panelPlacement({
     petPos,
@@ -1095,15 +1131,15 @@ function clearStatsTimers() {
 
 // Opening: the orbs fly together and merge first, then the panel grows out of that bubble.
 function openStats() {
-  if (statsOpen || !petWin.isVisible() || chase) return;
+  if (statsOpen || !petVisible() || !windowAlive(panelWin) || chase) return;
   statsOpen = true;
-  cancelGlide();
+  // A glide under way (e.g. a clicked roaming pet heading home) carries on; the panel follows the pet.
   markInteraction();
   clearStatsTimers();
   const side = placePanel();
   petWin.webContents.send('pet:stats', { open: true, side });
   statsTimers.push(setTimeout(() => {
-    if (!statsOpen) return;
+    if (!statsOpen || !windowAlive(panelWin)) return;
     placePanel();
     panelWin.showInactive();
     panelWin.webContents.send('panel:open', side);
@@ -1117,41 +1153,58 @@ function closeStats() {
   lastInteraction = Date.now();
   lastInteractionReason = 'stats panel closed';
   clearStatsTimers();
-  panelWin.webContents.send('panel:close');
+  if (windowAlive(panelWin)) panelWin.webContents.send('panel:close');
   statsTimers.push(setTimeout(() => {
     if (statsOpen) return;
-    panelWin.hide();
-    petWin.webContents.send('pet:stats', { open: false });
+    if (windowAlive(panelWin)) panelWin.hide();
+    if (windowAlive(petWin)) petWin.webContents.send('pet:stats', { open: false });
   }, 240));
 }
 
 function showStatsFromMenu() {
-  if (!petWin.isVisible()) showPet();
+  if (!windowAlive(petWin)) return;
+  if (!petVisible()) showPet();
   petWin.focus(); // so clicking elsewhere closes it again
   openStats();
 }
 
 function showPet() {
+  if (!windowAlive(petWin)) return;
+  const wasHidden = hiding || !petWin.isVisible();
+  clearTimeout(hideTimer); // shown again while it was still disappearing
+  hideTimer = null;
+  hiding = false;
   petWin.showInactive();
-  sendReaction(pet.reactions?.appear);
+  sendReaction(pet.reactions?.appear); // also undoes a disappear still playing, which would hold the pet invisible
+  if (wasHidden) greetAt = Date.now() + GREET_DELAY_MS;
   refreshTrayMenu();
 }
 
 function hidePet() {
+  if (!petVisible()) return;
   closeStats();
+  cancelDrag(); // a hidden window never hears the release
   if (chase) endChase(false);
   const home = cancelRoam({ returnHome: false });
   if (home) setPetBounds(home); // reappear at home, not mid-trip
+  // Counts as hidden from now on, so toggling again during the animation shows the pet instead of hiding it twice.
+  hiding = true;
   sendReaction(pet.reactions?.disappear);
-  setTimeout(() => {
-    petWin.hide();
-    refreshTrayMenu();
-  }, pet.reactions?.disappear ? pet.timings.disappearMs : 0);
+  hideTimer = setTimeout(guarded('hiding the pet', finishHiding), pet.reactions?.disappear ? pet.timings.disappearMs : 0);
+  refreshTrayMenu();
+}
+
+function finishHiding() {
+  hideTimer = null;
+  hiding = false;
+  if (quitting || !windowAlive(petWin)) return;
+  petWin.hide();
+  refreshTrayMenu();
 }
 
 function toggleVisible() {
-  if (!petWin) return;
-  if (petWin.isVisible()) hidePet();
+  if (!windowAlive(petWin)) return;
+  if (petVisible()) hidePet();
   else showPet();
 }
 
@@ -1161,10 +1214,16 @@ function quitWithGoodbye() {
     app.quit(); // asked again while it waves: don't make them wait
     return;
   }
-  closeStats();
-  const waved = playEvent('goodbye');
+  let waved = false;
+  let fades = false;
+  try {
+    closeStats();
+    waved = playEvent('goodbye');
+    fades = petVisible() && !!pet.reactions?.disappear;
+  } catch (err) {
+    logError('saying goodbye', err); // quit anyway
+  }
   quitting = true;
-  const fades = !!(petWin?.isVisible() && pet.reactions?.disappear);
   const plan = goodbyePlan(pet.timings, { waved, fades });
   setTimeout(() => {
     if (fades) sendReaction(pet.reactions.disappear);
@@ -1177,12 +1236,18 @@ function windowAlive(win) {
   return !!win && !win.isDestroyed();
 }
 
+// A pet playing its disappear animation already counts as hidden.
+function petVisible() {
+  return windowAlive(petWin) && petWin.isVisible() && !hiding;
+}
+
 // Stop every timer before windows are destroyed, so nothing touches a closed window during quit.
 function stopTimers() {
   quitting = true;
   appTimers.forEach(clearInterval);
   appTimers = [];
   clearTimeout(clickTimer);
+  clearTimeout(hideTimer);
   clearStatsTimers();
   cancelGlide();
   if (chase) clearInterval(chase.timer);
@@ -1199,6 +1264,30 @@ function trackCursor() {
   if (Math.abs(next.x - lastLook.x) < 0.02 && Math.abs(next.y - lastLook.y) < 0.02) return;
   lastLook = next;
   petWin.webContents.send('pet:look', next);
+}
+
+// Clicks on the see-through margins of the pet box go to the window below; only the body takes the mouse.
+// Checked on every mouse move over the window, whenever the pet moves or changes pose, and on a timer.
+function updatePointer() {
+  if (quitting || petDrawFailed || !windowAlive(petWin) || !petWin.isVisible() || !petPos) return;
+  const plan = pointerPlan({
+    cursor: screen.getCursorScreenPoint(),
+    petPos,
+    petSize: PET_SIZE,
+    insets: currentInsets(),
+    holding: pressed || !!drag,
+  });
+  pointer.overBody = plan.overBody;
+  if (plan.clickThrough !== pointer.clickThrough) {
+    pointer.clickThrough = plan.clickThrough;
+    // forward: mouse moves still reach the page while clicks pass through, so reaching the body is noticed at once
+    if (plan.clickThrough) petWin.setIgnoreMouseEvents(true, { forward: true });
+    else petWin.setIgnoreMouseEvents(false);
+  }
+  if (plan.hovered !== pointer.hovered) {
+    pointer.hovered = plan.hovered;
+    petWin.webContents.send('pet:hover', plan.hovered);
+  }
 }
 
 // ---------- tray ----------
@@ -1221,7 +1310,8 @@ function lifeSummary() {
 
 function buildMenu() {
   const hooks = hooksPlan.hooksMenu({ state: hooksStatus().state, listenerState: hookListener.state, port: config.hooksPort });
-  const awake = petWin?.isVisible() && displayState() !== 'sleeping';
+  const visible = petVisible();
+  const awake = visible && displayState() !== 'sleeping';
   return Menu.buildFromTemplate([
     { label: 'Show usage stats', click: showStatsFromMenu },
     {
@@ -1269,7 +1359,7 @@ function buildMenu() {
         { label: 'Night glow: never', type: 'radio', checked: config.nightMode === false, click: () => setAppearance('nightMode', false) },
       ],
     },
-    { label: petWin?.isVisible() ? 'Hide pet' : 'Show pet', accelerator: hotkeyLabel ?? undefined, registerAccelerator: false, click: toggleVisible },
+    { label: visible ? 'Hide pet' : 'Show pet', accelerator: hotkeyLabel ?? undefined, registerAccelerator: false, click: toggleVisible },
     { label: 'Refresh usage now', click: () => usage.refreshNow() },
     { label: 'Open Claude usage page', click: () => shell.openExternal(USAGE_PAGE) },
     { type: 'separator' },
@@ -1283,14 +1373,17 @@ function buildMenu() {
   ]);
 }
 
+// The tray menu is built each time it opens, so the Play items, happiness line and hooks item show what's true now.
+// That needs the 'right-click' event, which Windows only sends while no menu is attached. Linux never sends it, so
+// there the menu stays attached and is rebuilt after the actions that change it.
 function refreshTrayMenu() {
-  tray?.setContextMenu(buildMenu());
+  if (process.platform === 'linux') tray?.setContextMenu(buildMenu());
 }
 
 function createTray() {
   tray = new Tray(trayIcon());
   tray.on('click', toggleVisible);
-  tray.on('right-click', refreshTrayMenu); // keep the happiness/level line current
+  tray.on('right-click', guarded('tray menu', () => tray.popUpContextMenu(buildMenu())));
   refreshTrayMenu();
 }
 
@@ -1370,12 +1463,14 @@ function registerIpc() {
   });
 
   ipcMain.on('pet:drag-start', () => {
-    cancelGlide();
+    if (!petVisible()) return;
     closeStats();
+    const cursor = screen.getCursorScreenPoint();
+    // Set before a chase ends, so the chase's settle-glide doesn't pull against the hand that's carrying the pet.
+    drag = { dx: cursor.x - petPos.x, dy: cursor.y - petPos.y, lastX: cursor.x, lean: 0, lastBonkAt: 0 };
     if (chase) endChase(false);
     cancelRoam({ returnHome: false }); // wherever you drop it becomes home
-    const cursor = screen.getCursorScreenPoint();
-    drag = { dx: cursor.x - petPos.x, dy: cursor.y - petPos.y, lastX: cursor.x, lean: 0, lastBonkAt: 0 };
+    cancelGlide();
     shakeDetector.reset();
     markInteraction();
     sendHeld(true);
@@ -1400,7 +1495,11 @@ function registerIpc() {
   });
 
   ipcMain.on('pet:drag-end', () => {
-    if (!drag) return;
+    pressed = false;
+    if (!drag) {
+      updatePointer(); // the drag was already dropped (the pet was hidden, or a menu opened)
+      return;
+    }
     const { dizzy } = drag;
     drag = null;
     sendHeld(false);
@@ -1410,12 +1509,28 @@ function registerIpc() {
     updateFacing();
     settlePet();
     tick();
+    updatePointer();
   });
 
-  ipcMain.on('pet:click', registerClick);
+  ipcMain.on('pet:press', () => {
+    pressed = true;
+    updatePointer();
+  });
+
+  ipcMain.on('pet:release', () => {
+    pressed = false;
+    updatePointer();
+  });
+
+  ipcMain.on('pet:click', () => {
+    pressed = false;
+    updatePointer();
+    registerClick();
+  });
 
   ipcMain.on('pet:hover-move', (_event, x) => {
-    if (drag || chase || !Number.isFinite(x)) return;
+    updatePointer(); // mouse moves over the click-through margins arrive here too
+    if (drag || chase || !pointer.overBody || !Number.isFinite(x)) return; // only rubbing the body pets the pet
     if (rubDetector.add(x, Date.now())) {
       markInteraction();
       if (playEvent('petted')) rewardPet('petted');
@@ -1425,7 +1540,8 @@ function registerIpc() {
   ipcMain.on('pet:close-stats', closeStats);
   ipcMain.on('pet:context-menu', () => {
     closeStats();
-    buildMenu().popup({ window: petWin });
+    cancelDrag(); // the menu takes the mouse, so the release never reaches the pet
+    if (windowAlive(petWin)) buildMenu().popup({ window: petWin });
   });
 
   ipcMain.on('panel:clicked', closeStats);
@@ -1532,7 +1648,11 @@ async function startApp() {
   scheduleNextRoam();
   usage.start();
   watchClaude();
-  appTimers.push(setInterval(guarded('tick', tick), TICK_MS), setInterval(guarded('gaze', trackCursor), LOOK_MS));
+  appTimers.push(
+    setInterval(guarded('tick', tick), TICK_MS),
+    setInterval(guarded('gaze', trackCursor), LOOK_MS),
+    setInterval(guarded('click-through', updatePointer), LOOK_MS), // the pet can move under a cursor that stays still
+  );
   nativeTheme.on('updated', guarded('theme change', pushView));
   if (args.snapshot) scheduleSnapshot();
   if (notices.length) showNotice('Claude Pet started, but some things need your attention.', notices.join('\n\n'));

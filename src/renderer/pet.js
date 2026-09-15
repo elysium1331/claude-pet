@@ -11,6 +11,7 @@ const FALLBACK_STATES = {
 };
 const LOOK_SMOOTHING = 0.18;
 const MAX_PENDING_REACTIONS = 10;
+const WAKE_HOP_MS = 1600; // how long the wake-up hop plays
 
 let petConfig = null;
 let riveInstance = null;
@@ -21,6 +22,8 @@ let stats = { open: false, side: 'above' };
 let hovered = false;
 let held = { held: false, lean: 0 };
 let lastHoverSent = 0;
+let wakeRestorePending = false;
+let wakeTimer = null;
 const pendingReactions = [];
 const look = { x: 0, y: 0, targetX: 0, targetY: 0 };
 
@@ -106,9 +109,22 @@ function playReaction(name) {
   const trigger = vm.trigger(name);
   if (trigger) trigger.trigger();
   if (name === petConfig.reactions?.wake) {
-    // The wake-up hop resets the pose to idle inside the pet file; put back the pose the app wants once it's done.
-    setTimeout(applyPet, 1600);
+    wakeRestorePending = true;
+    scheduleWakeRestore();
   }
+}
+
+// The wake-up hop resets the pose to idle inside the pet file; put back the pose the app wants once it's done.
+function scheduleWakeRestore() {
+  clearTimeout(wakeTimer);
+  wakeTimer = setTimeout(restorePoseAfterWake, WAKE_HOP_MS);
+}
+
+function restorePoseAfterWake() {
+  // A hidden window doesn't animate, so the hop hasn't played yet: wait until the pet is shown (visibilitychange).
+  if (!wakeRestorePending || document.hidden) return;
+  wakeRestorePending = false;
+  applyPet();
 }
 
 function applyPet() {
@@ -142,6 +158,8 @@ const CALM_STATES = new Set(['sleeping']);
 const TRAVEL_STATES = new Set(['floatingTravel', 'walking', 'chasing']); // tail held up behind while on the move
 const TRAVEL_TAIL_LIFT = 0.6;
 const numberSupport = {};
+const AT_REST = 0.005;
+let ambientAtRest = true; // ears and tail are back at 0, so nothing needs writing while ambient motion is off
 
 // Checks once whether the pet file has a Number property, so missing ones aren't looked up every frame.
 function hasNumber(vm, name) {
@@ -153,14 +171,18 @@ function hasNumber(vm, name) {
 function stepAmbient(vm) {
   const binding = petConfig.binding || {};
   const names = [binding.earLeftProperty, binding.earRightProperty, binding.tailSwayProperty];
-  if (!ambient || !lastView?.ambientMotion || !names.some((n) => hasNumber(vm, n))) return;
-  ambient.setCalm(CALM_STATES.has(lastView.petState) || held.held);
-  ambient.setTailLift(TRAVEL_STATES.has(lastView.petState) ? TRAVEL_TAIL_LIFT : 0);
+  if (!ambient || !names.some((n) => hasNumber(vm, n))) return;
+  const enabled = !!lastView?.ambientMotion;
+  if (!enabled && ambientAtRest) return;
+  // Switched off: keep easing ears and tail back to rest, since the pet file holds whatever value it was given last.
+  ambient.setCalm(!enabled || CALM_STATES.has(lastView.petState) || held.held);
+  ambient.setTailLift(enabled && TRAVEL_STATES.has(lastView.petState) ? TRAVEL_TAIL_LIFT : 0);
   const motion = ambient.step(performance.now());
-  const round = (v) => Math.round(v * 1000) / 1000;
-  if (hasNumber(vm, names[0])) setNumber(vm, names[0], round(motion.earLeft));
-  if (hasNumber(vm, names[1])) setNumber(vm, names[1], round(motion.earRight));
-  if (hasNumber(vm, names[2])) setNumber(vm, names[2], round(motion.tailSway));
+  const values = [motion.earLeft, motion.earRight, motion.tailSway];
+  ambientAtRest = !enabled && values.every((v) => Math.abs(v) < AT_REST);
+  names.forEach((name, i) => {
+    if (hasNumber(vm, name)) setNumber(vm, name, ambientAtRest ? 0 : Math.round(values[i] * 1000) / 1000);
+  });
 }
 
 window.addEventListener('resize', () => {
@@ -208,32 +230,46 @@ window.petHost.onLook(({ x, y }) => {
   look.targetY = y;
 });
 
-// ---------- hover, click, drag, menu ----------
-
-canvas.addEventListener('pointerenter', () => {
-  hovered = true;
+// Decided by the main process: only the body counts, not the see-through margins of the window around it.
+window.petHost.onHover((over) => {
+  hovered = !!over;
+  canvas.classList.toggle('hovered', hovered);
   applyPet();
 });
 
-canvas.addEventListener('pointerleave', () => {
-  hovered = false;
-  applyPet();
-});
+// ---------- click, drag, menu ----------
 
-let dragging = false;
+let pressed = false;
 let moved = false;
 let downAt = null;
 
 canvas.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0) return;
-  dragging = true;
+  if (e.button !== 0 || pressed) return; // a second finger or pen doesn't start another press
+  pressed = true;
   moved = false;
   downAt = { x: e.screenX, y: e.screenY };
-  canvas.setPointerCapture(e.pointerId);
+  try {
+    canvas.setPointerCapture(e.pointerId);
+  } catch {
+    // the pointer is already gone; the press ends on the next move
+  }
+  window.petHost.press(); // the window keeps taking the mouse until the press ends, even off the body
 });
 
+// Every way a press ends. Only a release is a click, and a started drag always reports its end, or the main process
+// would keep carrying the pet around.
+function endPress(cancelled) {
+  if (!pressed) return;
+  pressed = false;
+  canvas.classList.remove('dragging');
+  if (moved) window.petHost.dragEnd();
+  else if (cancelled) window.petHost.release();
+  else window.petHost.click(); // main process counts clicks: 1 = stats, 2 = trick, 3+ = tickle
+}
+
 canvas.addEventListener('pointermove', (e) => {
-  if (!dragging) {
+  if (pressed && (e.buttons & 1) === 0) endPress(true); // released somewhere this window never heard about
+  if (!pressed) {
     // rubbing the cursor back and forth pets the pet; main process recognizes the gesture
     if (e.timeStamp - lastHoverSent > 30) {
       lastHoverSent = e.timeStamp;
@@ -249,12 +285,12 @@ canvas.addEventListener('pointermove', (e) => {
   if (moved) window.petHost.dragMove();
 });
 
-canvas.addEventListener('pointerup', () => {
-  if (!dragging) return;
-  dragging = false;
-  canvas.classList.remove('dragging');
-  if (moved) window.petHost.dragEnd();
-  else window.petHost.click(); // main process counts clicks: 1 = stats, 2 = trick, 3+ = tickle
+canvas.addEventListener('pointerup', () => endPress(false));
+canvas.addEventListener('pointercancel', () => endPress(true)); // e.g. the system took over a touch
+canvas.addEventListener('lostpointercapture', () => endPress(true)); // after a pointerup there's nothing left to end
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && wakeRestorePending) scheduleWakeRestore();
 });
 
 document.addEventListener('keydown', (e) => {

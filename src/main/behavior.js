@@ -10,11 +10,16 @@ function insetsForState(pet, state, facing = 1) {
   return insets;
 }
 
+// True when the pet gets up from a resting pose (sleeping or lounging).
+function gotUp(previousState, nextState) {
+  return RESTING_STATES.has(previousState) && !RESTING_STATES.has(nextState);
+}
+
 // Reaction to play when the pet gets up from a resting pose, or null.
 function wakeReaction(pet, previousState, nextState) {
   const wake = pet.reactions?.wake;
   if (!wake) return null;
-  return RESTING_STATES.has(previousState) && !RESTING_STATES.has(nextState) ? wake : null;
+  return gotUp(previousState, nextState) ? wake : null;
 }
 
 // Idle fidgets that make sense in the current pose. A fidget without `states` is idle-only.
@@ -103,6 +108,7 @@ module.exports = {
   isNightTime,
   restingPose,
   insetsForState,
+  gotUp,
   wakeReaction,
   fidgetsFor,
   lookFromCursor,

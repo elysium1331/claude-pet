@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
+  clampPet, bodyRect, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
 } = require('../src/main/placement');
 
 test('scaledPetSize scales the pet box and keeps the scale sensible', () => {
@@ -49,6 +49,15 @@ test('clampPet never lets the body go behind the taskbar and snaps onto it', () 
 test('clampPet respects a work area that does not start at 0,0 (second monitor / top taskbar)', () => {
   const second = { ...opts, workArea: { x: 1920, y: 40, width: 1280, height: 984 } };
   assert.deepEqual(clampPet({ x: 1800, y: 0 }, second), { x: 1905, y: 24, grounded: false });
+});
+
+test('bodyRect is the pet box without its transparent margins', () => {
+  // left 15, top 16, right 15, bottom 32 px of margin
+  assert.deepEqual(bodyRect({ x: 500, y: 904 }, petSize, insets), { left: 515, top: 920, right: 635, bottom: 1032 });
+  assert.deepEqual(
+    bodyRect({ x: -10, y: 0 }, petSize, { top: 0, right: 0, bottom: 0, left: 0 }),
+    { left: -10, top: 0, right: 140, bottom: 160 },
+  );
 });
 
 test('chooseFacing turns the pet toward the middle of the screen, with a dead zone so it does not flip-flop', () => {

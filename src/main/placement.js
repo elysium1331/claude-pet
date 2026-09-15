@@ -34,11 +34,20 @@ function clampPet(pos, { petSize, insets, workArea, snapPx = 0 }) {
   return { x: Math.round(x), y: Math.round(y), grounded };
 }
 
+// Where the body is on screen for a pet box at `petPos`: the box without its transparent margins.
+function bodyRect(petPos, petSize, insets) {
+  const ins = insetPx(insets, petSize);
+  return {
+    left: petPos.x + ins.left,
+    top: petPos.y + ins.top,
+    right: petPos.x + petSize.width - ins.right,
+    bottom: petPos.y + petSize.height - ins.bottom,
+  };
+}
+
 // Places a panel centered over the pet's body, above it when there's room, otherwise below.
 function panelPlacement({ petPos, petSize, insets, panelSize, workArea, gap = 4, margin = 8 }) {
-  const ins = insetPx(insets, petSize);
-  const bodyTop = petPos.y + ins.top;
-  const bodyBottom = petPos.y + petSize.height - ins.bottom;
+  const { top: bodyTop, bottom: bodyBottom } = bodyRect(petPos, petSize, insets);
   const centerX = petPos.x + petSize.width / 2;
   const x = Math.round(clamp(
     centerX - panelSize.width / 2,
@@ -91,5 +100,6 @@ function positionChanged(saved, pos) {
 }
 
 module.exports = {
-  ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
+  ZERO_INSETS, clampPet, bodyRect, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored,
+  positionChanged,
 };
