@@ -14,6 +14,7 @@ const DEFAULTS = {
   roam: 'taskbar', // 'off' | 'taskbar' | 'screen': occasionally take a little trip and come back
   roamMinMinutes: 10,
   roamMaxMinutes: 25,
+  strollPose: 'float', // 'float' travels at normal size; 'walk' uses the compact walking gait
   hooksPort: 47821, // local port Claude Code hooks send events to
   celebrateAfterSeconds: 20, // only celebrate Claude Code turns that took at least this long
   hideHotkey: 'CommandOrControl+Alt+P',

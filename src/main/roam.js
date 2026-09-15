@@ -67,4 +67,13 @@ function stepToward(pos, target, maxStep) {
   };
 }
 
-module.exports = { shouldStartRoam, roamDelayMs, planRoam, stepToward };
+// Which pose to show during a trip. Floating keeps the pet at its normal size; walking is the compact ground gait.
+function roamPose(kind, pausing, { strollPose = 'float', taskbarPose = 'float' } = {}) {
+  if (kind === 'stroll') {
+    if (pausing) return taskbarPose === 'sit' ? 'sitting' : 'idle';
+    return strollPose === 'walk' ? 'walking' : 'floatingTravel';
+  }
+  return pausing ? 'idle' : 'floatingTravel';
+}
+
+module.exports = { shouldStartRoam, roamDelayMs, planRoam, stepToward, roamPose };

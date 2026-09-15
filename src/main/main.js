@@ -22,7 +22,9 @@ const { startHookServer } = require('./hook-server');
 const hooksInstaller = require('./hooks-installer');
 const { classifyClicks, StrokeDetector, edgeBump } = require('./gestures');
 const petLife = require('./pet-life');
-const { shouldStartRoam, planRoam, stepToward, roamDelayMs } = require('./roam');
+const {
+  shouldStartRoam, planRoam, stepToward, roamDelayMs, roamPose: poseForRoam,
+} = require('./roam');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SERVED_DIRS = ['src/renderer', 'node_modules/@rive-app/webgl2', 'pets'].map((d) => path.join(ROOT, d) + path.sep);
@@ -566,9 +568,7 @@ function scheduleNextRoam(now = Date.now()) {
 }
 
 function roamPose() {
-  const pausing = roam.pauseUntil > 0;
-  if (roam.plan.kind === 'stroll') return pausing ? 'sitting' : 'walking';
-  return pausing ? 'idle' : 'floatingTravel';
+  return poseForRoam(roam.plan.kind, roam.pauseUntil > 0, config);
 }
 
 function startRoam() {
@@ -576,7 +576,9 @@ function startRoam() {
   closeStats();
   cancelGlide();
   const workArea = workAreaAt(petCenter());
-  const options = placementOptions(workArea);
+  // Plan with the travel pose's bounds, so e.g. a floating tail doesn't dip into the taskbar.
+  const travelPose = resolveState(pet, poseForRoam('stroll', false, config));
+  const options = { petSize: PET_SIZE, insets: insetsForState(pet, travelPose, facing), workArea, snapPx: SNAP_PX };
   const clamp = (p) => {
     const placed = clampPet(p, { ...options, snapPx: 0 });
     return { x: placed.x, y: placed.y };
@@ -996,6 +998,9 @@ function buildMenu() {
         { label: 'Free roam: off', type: 'radio', checked: config.roam === 'off', click: () => setRoamMode('off') },
         { label: 'Free roam: along the taskbar', type: 'radio', checked: config.roam === 'taskbar', click: () => setRoamMode('taskbar') },
         { label: 'Free roam: anywhere on screen', type: 'radio', checked: config.roam === 'screen', click: () => setRoamMode('screen') },
+        { type: 'separator' },
+        { label: 'Stroll: float (normal size)', type: 'radio', checked: config.strollPose !== 'walk', click: () => setAppearance('strollPose', 'float') },
+        { label: 'Stroll: walk (compact)', type: 'radio', checked: config.strollPose === 'walk', click: () => setAppearance('strollPose', 'walk') },
       ],
     },
     {

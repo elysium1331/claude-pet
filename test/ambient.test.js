@@ -46,6 +46,19 @@ test('different seeds give different motion (it is random, not a fixed loop)', (
   assert.notEqual(a, b);
 });
 
+test('a tail lift raises the tail while travelling and eases back down after', () => {
+  const ambient = createAmbient({ random: seeded(5) });
+  const average = (frames) => frames.reduce((sum, f) => sum + f.tailSway, 0) / frames.length;
+  const before = average(run(ambient, 0, 10_000));
+  ambient.setTailLift(0.6);
+  const lifted = run(ambient, 10_016, 20_000);
+  assert.ok(average(lifted.slice(-300)) > before + 0.4, 'tail held noticeably higher');
+  assert.ok(lifted.every((f) => f.tailSway <= 1), 'still within range');
+  ambient.setTailLift(0);
+  const after = run(ambient, 20_016, 30_000);
+  assert.ok(average(after.slice(-300)) < average(lifted.slice(-300)) - 0.3, 'drops back down');
+});
+
 test('calm mode (sleeping) eases everything back to rest', () => {
   const ambient = createAmbient({ random: seeded(9) });
   run(ambient, 0, 20_000);

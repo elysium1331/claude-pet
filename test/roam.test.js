@@ -1,6 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { shouldStartRoam, planRoam, stepToward, roamDelayMs } = require('../src/main/roam');
+const { shouldStartRoam, planRoam, stepToward, roamDelayMs, roamPose } = require('../src/main/roam');
+
+test('roamPose floats at normal size by default, or walks if you prefer', () => {
+  const prefs = { strollPose: 'float', taskbarPose: 'float' };
+  assert.equal(roamPose('stroll', false, prefs), 'floatingTravel');
+  assert.equal(roamPose('stroll', true, prefs), 'idle');
+  assert.equal(roamPose('stroll', false, { ...prefs, strollPose: 'walk' }), 'walking');
+  assert.equal(roamPose('stroll', true, { ...prefs, taskbarPose: 'sit' }), 'sitting');
+  assert.equal(roamPose('wander', false, prefs), 'floatingTravel');
+  assert.equal(roamPose('wander', true, { strollPose: 'walk', taskbarPose: 'sit' }), 'idle');
+});
 
 // deterministic "random" that replays a list of values
 const sequence = (...values) => {

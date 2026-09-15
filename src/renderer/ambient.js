@@ -22,6 +22,8 @@
     let last = null;
     let calm = false;
     let nextEarAt = 0;
+    let tailLift = 0; // steady raise added on top of the drift, e.g. while travelling
+    let tailLiftTarget = 0;
     const ears = {
       left: { value: 0, target: 0, releaseAt: 0 },
       right: { value: 0, target: 0, releaseAt: 0 },
@@ -68,6 +70,7 @@
         tail.rate = 3;
       }
       tail.value = approach(tail.value, tail.target, tail.rate, dt);
+      tailLift = approach(tailLift, calm ? 0 : tailLiftTarget, 3, dt);
     }
 
     function step(now) {
@@ -80,13 +83,20 @@
       last = now;
       stepEars(now, dt);
       stepTail(now, dt);
-      return { earLeft: clampUnit(ears.left.value), earRight: clampUnit(ears.right.value), tailSway: clampUnit(tail.value) };
+      return {
+        earLeft: clampUnit(ears.left.value),
+        earRight: clampUnit(ears.right.value),
+        tailSway: clampUnit(tail.value + tailLift),
+      };
     }
 
     return {
       step,
       setCalm(value) {
         calm = !!value;
+      },
+      setTailLift(value) {
+        tailLiftTarget = clampUnit(Number(value) || 0);
       },
     };
   }

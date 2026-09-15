@@ -122,6 +122,8 @@ function applyPet() {
 
 const ambient = window.PetAmbient ? window.PetAmbient.createAmbient() : null;
 const CALM_STATES = new Set(['sleeping']);
+const TRAVEL_STATES = new Set(['floatingTravel', 'walking', 'chasing']); // tail held up behind while on the move
+const TRAVEL_TAIL_LIFT = 0.6;
 const numberSupport = {};
 
 // Checks once whether the pet file has a Number property, so missing ones aren't looked up every frame.
@@ -136,6 +138,7 @@ function stepAmbient(vm) {
   const names = [binding.earLeftProperty, binding.earRightProperty, binding.tailSwayProperty];
   if (!ambient || !lastView?.ambientMotion || !names.some((n) => hasNumber(vm, n))) return;
   ambient.setCalm(CALM_STATES.has(lastView.petState) || held.held);
+  ambient.setTailLift(TRAVEL_STATES.has(lastView.petState) ? TRAVEL_TAIL_LIFT : 0);
   const motion = ambient.step(performance.now());
   const round = (v) => Math.round(v * 1000) / 1000;
   if (hasNumber(vm, names[0])) setNumber(vm, names[0], round(motion.earLeft));

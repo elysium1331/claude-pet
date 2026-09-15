@@ -81,6 +81,7 @@ Right-click the pet or the tray icon and choose **Open settings file**. Restart 
 | `fidgets` | `true` | Occasional idle animations (if the pet has them) |
 | `roam` | `"taskbar"` | Free roam: `"off"`, `"taskbar"` or `"screen"` |
 | `roamMinMinutes` / `roamMaxMinutes` | `10` / `25` | How long it waits between trips |
+| `strollPose` | `"float"` | Taskbar strolls: `"float"` at normal size, or `"walk"` with the compact walking gait |
 | `hooksPort` | `47821` | Local port Claude Code hooks send events to (reconnect after changing) |
 | `celebrateAfterSeconds` | `20` | Only celebrate Claude Code tasks that took at least this long |
 | `hideHotkey` | `CommandOrControl+Alt+P` | Show/hide shortcut |
