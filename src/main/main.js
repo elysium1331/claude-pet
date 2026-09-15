@@ -53,7 +53,11 @@ protocol.registerSchemesAsPrivileged([
 if (args.snapshot) {
   // Snapshot runs use their own profile so they work while a normal copy of the pet is running.
   app.setPath('userData', path.join(app.getPath('temp'), 'claude-pet-snapshot'));
-} else if (!app.requestSingleInstanceLock()) {
+} else {
+  // Same settings folder whether run from source or installed ("Claude Pet"), so nothing is lost when switching.
+  app.setPath('userData', path.join(app.getPath('appData'), 'claude-pet'));
+}
+if (!args.snapshot && !app.requestSingleInstanceLock()) {
   app.quit();
 }
 

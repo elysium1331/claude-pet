@@ -34,7 +34,15 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 - [Node.js](https://nodejs.org) 20+
 - A Claude Pro or Max plan, signed in to **Claude Code** on this computer
 
-## Install and run
+## Install (Windows)
+
+1. Download **Claude Pet Setup** from the [Releases](https://github.com/elysium1331/claude-pet/releases) page.
+2. Run it. It installs for your user only (no admin needed), adds **Claude Pet** to the Start Menu and your desktop, and starts the pet.
+3. Windows may warn that the app is from an unknown publisher, because it isn't code-signed yet. Choose **More info → Run anyway**.
+
+After that, start it any time from the Start Menu or desktop shortcut. To have it start with Windows, right-click the pet (or the tray icon) and turn on **Launch at startup**. Uninstall it from Windows **Settings → Apps**.
+
+## Run from source
 
 ```bash
 git clone https://github.com/elysium1331/claude-pet.git

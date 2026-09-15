@@ -1,5 +1,6 @@
 {
   "name": "claude-pet",
+  "productName": "Claude Pet",
   "version": "0.1.0",
   "description": "An animated desktop pet that shows your Claude plan usage at a glance. Unofficial; not affiliated with Anthropic.",
   "main": "src/main/main.js",
@@ -7,10 +8,40 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "test": "node --test"
+    "test": "node --test",
+    "icon": "electron build/make-icon.js",
+    "dist": "electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "io.github.elysium1331.claudepet",
+    "productName": "Claude Pet",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "pets/**/*",
+      "!pets/**/*-source.zip",
+      "!pets/**/state-map.md",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Claude Pet",
+      "runAfterFinish": true
+    }
   },
   "devDependencies": {
-    "electron": "^44.3.0"
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "@rive-app/webgl2": "2.42.1"

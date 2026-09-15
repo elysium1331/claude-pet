@@ -87,7 +87,6 @@
     { "trigger": "stretch", "ms": 3000 },
     { "trigger": "yawn", "ms": 2500, "states": ["idle", "lounging", "sitting"] },
     { "trigger": "orbPlay", "ms": 3500 },
-    { "trigger": "tailChase", "ms": 3000 },
     { "trigger": "scratchEar", "ms": 2000, "states": ["idle", "lounging", "sitting"] },
     { "trigger": "sneeze", "ms": 1500, "states": ["idle", "sitting"] },
     { "trigger": "sniff", "ms": 2000, "states": ["sitting"] }
