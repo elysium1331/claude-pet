@@ -1,5 +1,6 @@
 // A random secret that Claude Pet's hooks send with every event. 127.0.0.1 is shared by every account on the PC,
 // but the token lives in this user's settings folders, so other accounts can't forge events or read the status.
+// That holds on Windows only: elsewhere the token is on curl's command line, which other accounts can list.
 const crypto = require('node:crypto');
 const path = require('node:path');
 const { readJsonFile, writeJsonAtomic } = require('./json-file');

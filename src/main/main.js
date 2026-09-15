@@ -75,9 +75,10 @@ if (args.snapshot) {
   app.setPath('userData', path.join(app.getPath('appData'), 'claude-pet'));
 }
 // The uninstaller's --remove-hooks run doesn't take the lock, so it works whether or not the pet is running.
-if (!args.snapshot && !args.removeHooks && !app.requestSingleInstanceLock()) {
-  app.quit();
-}
+// A copy that doesn't get it never starts: app.quit() before ready still lets whenReady resolve, and a second copy
+// would otherwise try the port, fail, and replace the hooks token the running pet uses.
+const gotLock = !!(args.snapshot || args.removeHooks || app.requestSingleInstanceLock());
+if (!gotLock) app.quit();
 
 logStrayErrors(process, logError);
 
@@ -125,7 +126,7 @@ let nextFidgetAt = 0;
 let lastViewPush = 0;
 let lastLook = { x: 0, y: 0 };
 let lastGoodUsage = null;
-let quitting = false;
+let quitting = !gotLock;
 
 let appTimers = [];
 let life = null;
@@ -140,7 +141,7 @@ let displayedGrowth = 0; // lags behind life.level until the level-up celebratio
 let lastNightMode = null;
 let clickCount = 0;
 let clickTimer = null;
-let nextTrick = 0;
+const nextInList = new Map(); // reaction name -> which of its trigger names plays next
 const rubDetector = new StrokeDetector({ minTravel: 6, reversals: 4, windowMs: 1200, cooldownMs: 4000 });
 const shakeDetector = new StrokeDetector({ minTravel: 40, reversals: 5, windowMs: 1500 });
 
@@ -426,7 +427,11 @@ function sendHeld(held, lean = 0) {
 // A meaningful reaction (not a random fidget): play it if the pet is awake and visible, and hold off fidgets.
 function playEvent(eventName) {
   let trigger = pet.reactions?.[eventName];
-  if (Array.isArray(trigger)) trigger = trigger[nextTrick++ % trigger.length];
+  if (Array.isArray(trigger)) {
+    const index = nextInList.get(eventName) ?? 0;
+    nextInList.set(eventName, index + 1);
+    trigger = trigger[index % trigger.length];
+  }
   if (!trigger || !petVisible() || displayState() === 'sleeping') return false;
   sendReaction(trigger);
   nextFidgetAt = Math.max(nextFidgetAt, Date.now() + 10_000);
@@ -1777,7 +1782,7 @@ if (args.removeHooks) {
     logError('removing Claude Code hooks', err);
     app.exit(1);
   });
-} else {
+} else if (gotLock) {
   startGuarded(app.whenReady(), startApp, failStartup);
 }
 

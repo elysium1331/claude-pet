@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const EventEmitter = require('node:events');
 const fs = require('node:fs');
+const http = require('node:http');
 const Module = require('node:module');
 const os = require('node:os');
 const path = require('node:path');
@@ -160,15 +161,21 @@ function menuItem(template, label) {
   return null;
 }
 
-async function startMain(t, {
-  idleSeconds = 0, argv = [], displays = [MAIN_DISPLAY], config = {}, files = {},
+// Loads main.js. Runs as a snapshot run unless snapshot is false; singleInstance: false is a copy of the pet started
+// while another one runs. Every path, Claude Code's folder included, is inside a temporary folder.
+async function loadMain(t, {
+  idleSeconds = 0, argv = [], displays = [MAIN_DISPLAY], config = {}, files = {}, snapshot = true, singleInstance = true,
 } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-pet-main-'));
-  const profile = path.join(tmp, 'claude-pet-snapshot');
+  const profile = path.join(tmp, snapshot ? 'claude-pet-snapshot' : 'claude-pet');
   fs.mkdirSync(profile);
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ credentialsPath: path.join(tmp, 'none.json'), ...config }));
-  for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(tmp, name), content);
+  for (const [name, content] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(tmp, name)), { recursive: true });
+    fs.writeFileSync(path.join(tmp, name), content);
+  }
   const fake = fakeElectron(tmp);
+  fake.electron.app.requestSingleInstanceLock = () => singleInstance;
   fake.idleSeconds = idleSeconds;
   fake.displays = displays;
   const errors = [];
@@ -197,14 +204,19 @@ async function startMain(t, {
   Object.assign(electronModule, { filename: ELECTRON, loaded: true, exports: fake.electron });
   require.cache[ELECTRON] = electronModule;
   delete require.cache[MAIN];
-  process.argv = [process.execPath, 'main', `--snapshot=${path.join(tmp, 'snapshot.png')}`, '--snapshot-delay=100000000',
-    '--claude-running=true', ...argv.map((arg) => arg.replaceAll('<tmp>', tmp))];
+  const snapshotArgs = snapshot ? [`--snapshot=${path.join(tmp, 'snapshot.png')}`, '--snapshot-delay=100000000'] : [];
+  process.argv = [process.execPath, 'main', ...snapshotArgs, '--claude-running=true', ...argv.map((arg) => arg.replaceAll('<tmp>', tmp))];
   try {
     require(MAIN);
   } finally {
     process.argv = saved.argv;
   }
   await new Promise((resolve) => setImmediate(resolve)); // startApp runs once the app is "ready"
+  return { fake, errors, tmp };
+}
+
+async function startMain(t, options) {
+  const { fake, errors } = await loadMain(t, options);
   assert.equal(fake.exitCode, undefined, errors.join('\n'));
 
   const page = (name) => fake.windows.find((win) => win.url?.endsWith(`/${name}`));
@@ -794,4 +806,34 @@ test('the stats panel changes sides with the card when it grows past the room ab
   app.fake.ipc['panel:size']({ sender: app.panelWin.webContents }, { width: 244, height: 300 });
   assert.equal(panelSent('panel:open').length, 2, 'nothing more to say while it stays on that side');
   assert.deepEqual(app.errors, []);
+});
+
+test('each list of reaction names plays its own names in turn, whatever other lists played in between', async (t) => {
+  const app = await startMain(t);
+  app.tick(1100);
+  const { tricks, roamPause } = FOX.reactions;
+  const fromLists = () => app.reactions().filter((name) => tricks.includes(name) || roamPause.includes(name));
+  app.clickMenu('Do a trick');
+  app.clickMenu('Go for a stroll now');
+  for (let waited = 0; app.status().roaming && waited < 60_000; waited += 250) app.tick(250);
+  assert.equal(app.status().roaming, false);
+  app.tick(2000);
+  app.clickMenu('Do a trick');
+  assert.deepEqual(fromLists(), [tricks[0], roamPause[0], tricks[1]]);
+  assert.deepEqual(app.errors, []);
+});
+
+// ---------- single instance ----------
+
+test('a copy started while the pet runs quits without starting, so the hooks token and Claude Code settings stay as they were', async (t) => {
+  const settings = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'http', url: 'http://127.0.0.1:47821/claude-pet/hook/Stop', timeout: 5 }] }] } });
+  const listens = [];
+  t.mock.method(http, 'createServer', () => Object.assign(new EventEmitter(), { listen: (...args) => listens.push(args), close() {} }));
+  const { fake, tmp } = await loadMain(t, { snapshot: false, singleInstance: false, files: { 'claude/settings.json': settings } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(fake.quits >= 1);
+  assert.equal(fake.windows.length, 0);
+  assert.deepEqual(listens, []);
+  assert.equal(fs.existsSync(path.join(tmp, 'claude-pet', 'hooks-token.json')), false);
+  assert.equal(fs.readFileSync(path.join(tmp, 'claude', 'settings.json'), 'utf8'), settings);
 });

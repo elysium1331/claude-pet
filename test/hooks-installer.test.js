@@ -235,6 +235,36 @@ test('a linked settings file is written where the link points, without replacing
   assert.deepEqual(readJson(`${file}${BACKUP_SUFFIX}`), { ...existing, model: 'sonnet' }); // a copy of the real file
 });
 
+// Settings often hold secrets in "env": a file only its owner could read must stay that way.
+test('changing the settings file keeps its permissions', (t) => {
+  const { file } = tempSettings(t, existing);
+  const target = fs.realpathSync(file);
+  const { statSync, writeFileSync } = fs;
+  t.mock.method(fs, 'statSync', (p, ...rest) => {
+    const stats = statSync(p, ...rest);
+    return p === target ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, { mode: 0o100600 }) : stats;
+  });
+  const modes = [];
+  t.mock.method(fs, 'writeFileSync', (p, text, opts) => {
+    if (p === `${target}.claude-pet.tmp`) modes.push(opts?.mode);
+    return writeFileSync(p, text, opts);
+  });
+  installHooks({ ...options, file });
+  uninstallHooks({ file });
+  assert.deepEqual(modes, [0o600, 0o600]);
+});
+
+test('an owner-only settings file stays owner-only after connecting and disconnecting', {
+  skip: process.platform === 'win32' && 'Windows does not use permission bits',
+}, (t) => {
+  const { file } = tempSettings(t, existing);
+  fs.chmodSync(file, 0o600);
+  installHooks({ ...options, file });
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  uninstallHooks({ file });
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
+
 test('a symlinked settings file is written through the link', (t) => {
   const { dir, file } = tempSettings(t);
   const real = path.join(dir, 'dotfiles-settings.json');

@@ -20,7 +20,7 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 
 ## Playing with it
 
-- **Drag** it around: it dangles and leans, bonks if you push it into a screen edge (not where two monitors meet), gets dizzy if you shake it, and lands when you drop it on the taskbar (where it sits).
+- **Drag** it around: it dangles and leans, bonks if you push it into a screen edge (not where two monitors meet), gets dizzy if you shake it, and lands when you drop it on the taskbar (or on the bottom of a screen with no taskbar). It sits there if Appearance → On the taskbar is set to Sit.
 - **Rub** the cursor back and forth over it to pet it.
 - **Double-click** for a trick; **triple-click** to tickle it.
 - Right-click → **Play**: feed it a spark, have it chase your cursor, or ask for a trick. The same menu shows its happiness and level.
@@ -45,7 +45,7 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 
 After that, start it any time from the Start Menu or desktop shortcut. To have it start with Windows, right-click the pet (or the tray icon) and turn on **Launch at startup**. Uninstall it from Windows **Settings → Apps**.
 
-Uninstalling also removes the pet's Claude Code hooks and its startup entry. It leaves two things for you to keep or delete: the pet's settings, happiness and level in `%APPDATA%\claude-pet`, and the last backup of Claude Code's settings, `settings.json.claude-pet-backup`, next to Claude Code's `settings.json`.
+Uninstalling also removes the pet's Claude Code hooks and its startup entry. It leaves two things for you to keep or delete: the pet's folder, `%APPDATA%\claude-pet` (settings, happiness and level, your last usage numbers, the hooks token, the log and any pets you added), and the last backup of Claude Code's settings, `settings.json.claude-pet-backup`, next to Claude Code's `settings.json`.
 
 ## Run from source
 
@@ -79,11 +79,11 @@ Right-click the pet or the tray icon and choose **Connect to Claude Code…**. T
 - **Done:** celebrates when a longer task finishes
 - **Oops:** flinches when a tool fails
 
-This adds hooks to Claude Code's user settings: `settings.json` in `%USERPROFILE%\.claude`, or in `CLAUDE_CONFIG_DIR` if you set it. Each hook uses `curl`, which comes with Windows 10 and 11, to send the event to the pet at `127.0.0.1:47821` on your own computer, never through a proxy. Nothing leaves your machine.
+This adds hooks to Claude Code's user settings: `settings.json` in `%USERPROFILE%\.claude`, or in `CLAUDE_CONFIG_DIR` if you set it. Each hook uses `curl`, which comes with Windows 11 and Windows 10 version 1803 or later, to send the event to the pet at `127.0.0.1:47821` on your own computer, never through a proxy. Nothing leaves your machine.
 
 - The hooks run in the background. Claude Code doesn't wait for them and ignores any reply, so no program listening on that port can approve a tool or change what Claude does. If the pet isn't running, Claude Code simply carries on.
 - While the pet isn't running, Claude Code still sends each event, including your prompts and what tools read and write, to `127.0.0.1:47821`, where any other program using that port could read it. If the pet won't be running, turn on **Launch at startup** or choose **Disconnect from Claude Code…**.
-- Every event carries a random token that only your Windows account can read, kept in `%APPDATA%\claude-pet\hooks-token.json`. The pet ignores events without it, so other programs and other accounts on the same PC can't fake them.
+- Every event carries a random token, kept in `%APPDATA%\claude-pet\hooks-token.json` and in the hook commands in Claude Code's `settings.json`. The pet ignores events without it, so web pages and other Windows accounts on the same PC can't fake them. (On other systems the token is on curl's command line while a hook runs, where other accounts can see it.)
 - Before changing the file, the pet saves a copy of it as `settings.json.claude-pet-backup` next to it. There is only ever one backup, replaced each time. Your other settings and hooks are left alone, and a symlinked settings file stays a link.
 - If another program is already using the port, the pet tells you, won't connect and never moves its hooks there. Hooks that were already sending that program your events gave it the token, so the pet makes a new one, which the hooks get once the pet has its port again. Set `hooksPort` to a free port and restart the pet.
 - Hooks added by an older version of Claude Pet, or pointing at an old port, are updated automatically when the pet starts and has its port. Claude Code sessions that were already open may need a restart to pick up the change.
@@ -94,7 +94,7 @@ While the pet is hidden it stays silent.
 
 ## Settings
 
-Right-click the pet or the tray icon and choose **Open settings file** (`%APPDATA%\claude-pet\config.json`). Save your changes, then quit the pet and start it again to apply them. The pet keeps your edits even if it's still running while you edit: it only ever saves the settings you change from its menus.
+Right-click the pet or the tray icon and choose **Open settings file** (`%APPDATA%\claude-pet\config.json`). Save your changes, then quit the pet and start it again to apply them. The pet keeps your edits even if it's still running while you edit: it only ever saves the settings you change from its menus, plus where the pet was left (`petPosition`) and the day it last said hello.
 
 - A setting with the wrong type or an out-of-range value falls back to its default, and the pet tells you which one when it starts.
 - If the file isn't valid JSON (a trailing comma or a missing quote, say), the pet runs on default settings, saves a copy as `config.json.broken-<time>`, tells you, and leaves your file alone until you fix it and restart.
@@ -112,7 +112,7 @@ Right-click the pet or the tray icon and choose **Open settings file** (`%APPDAT
 | `roam` | `"taskbar"` | Free roam: `"off"`, `"taskbar"` or `"screen"` |
 | `roamMinMinutes` / `roamMaxMinutes` | `10` / `25` | How long it waits between trips (minutes, at least 1) |
 | `strollPose` | `"float"` | Taskbar strolls: `"float"` at normal size, or `"walk"` with the compact walking gait |
-| `hooksPort` | `47821` | Local port Claude Code hooks send events to, 1024–65535. The pet moves its hooks to the new port when it restarts. |
+| `hooksPort` | `47821` | Local port Claude Code hooks send events to, a whole number from 1024 to 65535. The pet moves its hooks to the new port when it restarts. |
 | `celebrateAfterSeconds` | `20` | Only celebrate Claude Code tasks that took at least this long |
 | `hideHotkey` | `CommandOrControl+Alt+P` | Show/hide shortcut; `null` for none |
 | `launchAtStartup` | `false` | Also toggleable from the tray menu |
@@ -126,16 +126,16 @@ Right-click the pet or the tray icon and choose **Open settings file** (`%APPDAT
 | `nightStartHour` / `nightEndHour` | `22` / `7` | When the automatic night glow starts and ends (hours, 0–24; fractions allowed) |
 | `lightBackdrop` | `"auto"` | Stronger outline for light desktops: `true`, `false`, or `"auto"` (follows Windows theme) |
 | `credentialsPath` | `null` | Custom path to Claude Code's credentials file; `null` = `.credentials.json` in `CLAUDE_CONFIG_DIR`, or in `%USERPROFILE%\.claude` |
-| `pet` | `"celestial-fox"` | Which pet to show: the folder name of a built-in pet or one you added (letters, digits, `.`, `_` and `-` only) |
+| `pet` | `"celestial-fox"` | Which pet to show: the folder name of a built-in pet or one you added (letters, digits, `.`, `_` and `-`, starting with a letter or digit, up to 64 characters) |
 | `petPosition` | `null` | Where the pet was last left, saved by the pet when you move it; `null` = the first-run spot on the left of the taskbar |
 
 ## Make your own pet
 
-A pet is a folder with a [Rive](https://rive.app) file and a `pet.json` that maps the app's values onto the file's view model. Put your own pets in the `pets` folder next to your settings file, for example `%APPDATA%\claude-pet\pets\my-pet\pet.json`, then set `"pet": "my-pet"` in the settings. (The built-in pets are in the app's own `pets/` folder, which is read-only in the installed app.)
+A pet is a folder with a [Rive](https://rive.app) file and a `pet.json` that maps the app's values onto the file's view model. Put your own pets in the `pets` folder next to your settings file, for example `%APPDATA%\claude-pet\pets\my-pet\pet.json`, then set `"pet": "my-pet"` in the settings. Give it a folder name no built-in pet uses: a built-in pet with the same name is always chosen first. (The built-in pets are in the app's own `pets/` folder, which is read-only in the installed app.)
 
 If the chosen pet is missing, its `pet.json` has a mistake, or its Rive file can't be drawn, Claude Pet shows the built-in Celestial Fox instead and tells you what went wrong.
 
-The smallest pet needs only a file and its poses:
+The smallest pet needs a file, its poses and a `stateProperty` binding (plus `artboard` and `stateMachine` if the file's defaults aren't the ones to use):
 
 ```json
 {
@@ -215,13 +215,13 @@ Every binding is optional. Leave out any your pet doesn't use.
 | `paletteProperty` | Number | The chosen color theme's position in `palettes` |
 | `nightModeProperty` | Boolean | True while the night glow is on |
 | `facingProperty` | Number | `1` facing right, `-1` facing left. A pet with this binding turns itself: its window and insets are not mirrored, so give its insets for both directions. |
-| `earLeftProperty` | Number | Random ear twitch, -1 to 1, while `ambientMotion` is on; eased back to 0 when it's turned off |
+| `earLeftProperty` | Number | Random ear twitch, -1 to 1, while `ambientMotion` is on; eased back to 0 when it's turned off, and while the pet is sleeping or held |
 | `earRightProperty` | Number | The same for the other ear |
-| `tailSwayProperty` | Number | Random tail drift, -1 to 1, the same way |
+| `tailSwayProperty` | Number | Random tail drift, -1 to 1, the same way. While travelling (`floatingTravel`, `walking`, `chasing`) the tail is also held up, adding about 0.6 (clamped to 1). |
 
 ### Reactions
 
-`reactions` maps the moments below to Trigger names. `wake`, `appear` and `disappear` take one name each. Every other reaction takes one name or a list of names, played in turn, and only plays while the pet is shown and not sleeping.
+`reactions` maps the moments below to Trigger names. `wake`, `appear` and `disappear` take one name each. Every other reaction takes one name or a list of names (each list's names are played in turn, one each time that reaction plays), and only plays while the pet is shown and not sleeping.
 
 | Reaction | When it plays |
 |---|---|

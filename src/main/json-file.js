@@ -21,15 +21,22 @@ function readJsonFile(file) {
 
 // Write to a temp file and rename it over the target, so a crash mid-write leaves the old file intact.
 // `mode` sets file permissions where the OS uses them (not on Windows, where the folder's access rules apply).
+// A temp file left by a crash is removed first and 'wx' creates a new one, so `mode` really applies and nothing
+// sitting at that path (a link to another file, say) is written through.
 function writeJsonAtomic(file, value, { pretty = false, mode } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.claude-pet.tmp`;
   const text = pretty ? `${JSON.stringify(value, null, 2)}\n` : JSON.stringify(value);
-  fs.writeFileSync(tmp, text, mode === undefined ? undefined : { mode });
+  fs.rmSync(tmp, { force: true });
   try {
+    fs.writeFileSync(tmp, text, { flag: 'wx', ...(mode === undefined ? {} : { mode }) });
     fs.renameSync(tmp, file);
   } catch (err) {
-    fs.rmSync(tmp, { force: true });
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      // the original error matters more than a temp file that couldn't be removed
+    }
     throw err;
   }
 }

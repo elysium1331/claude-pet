@@ -40,6 +40,42 @@ test('writeJsonAtomic keeps the old file when the rename fails', (t) => {
   assert.equal(fs.existsSync(`${file}.claude-pet.tmp`), false);
 });
 
+test('writeJsonAtomic replaces a temp file left by a crash instead of writing through it', (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, 'd.json');
+  const other = path.join(dir, 'other.json');
+  fs.writeFileSync(other, 'untouched');
+  fs.linkSync(other, `${file}.claude-pet.tmp`); // left over, and linked to another file
+  writeJsonAtomic(file, { a: 1 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { a: 1 });
+  assert.equal(fs.readFileSync(other, 'utf8'), 'untouched');
+  assert.equal(fs.existsSync(`${file}.claude-pet.tmp`), false);
+});
+
+test('writeJsonAtomic gives a new file the requested permissions even when a temp file was left over', {
+  skip: process.platform === 'win32' && 'Windows does not use permission bits',
+}, (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, 'e.json');
+  fs.writeFileSync(`${file}.claude-pet.tmp`, 'old', { mode: 0o644 });
+  writeJsonAtomic(file, { a: 1 }, { mode: 0o600 });
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
+
+test('writeJsonAtomic leaves no half-written temp file when writing it fails', (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, 'f.json');
+  fs.writeFileSync(file, '{"a":1}');
+  const { writeFileSync } = fs;
+  t.mock.method(fs, 'writeFileSync', (target, text, options) => {
+    writeFileSync(target, String(text).slice(0, 3), options);
+    throw Object.assign(new Error('no space left'), { code: 'ENOSPC' });
+  });
+  assert.throws(() => writeJsonAtomic(file, { a: 2 }), /no space left/);
+  assert.deepEqual(fs.readdirSync(dir), ['f.json']);
+  assert.equal(fs.readFileSync(file, 'utf8'), '{"a":1}');
+});
+
 test('keepBrokenCopy saves one copy per distinct broken content', (t) => {
   const dir = tempDir(t);
   const file = path.join(dir, 'config.json');

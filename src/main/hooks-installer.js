@@ -167,7 +167,8 @@ function removeOldBackups(file) {
 
 // Keeps a single backup (settings.json.claude-pet-backup, the file as it was before the pet's latest change), so
 // old copies of secrets kept in settings don't pile up. A symlinked or hard-linked settings.json (dotfiles) is
-// written through, so the link keeps pointing at the user's own file.
+// written through, so the link keeps pointing at the user's own file. The new file gets the old one's permissions,
+// so settings only their owner could read (they often hold secrets in "env") stay that way.
 function writeSettings(settings, exists, file) {
   if (!exists) {
     writeJsonAtomic(file, settings, { pretty: true });
@@ -182,8 +183,9 @@ function writeSettings(settings, exists, file) {
   const backupPath = `${file}${BACKUP_SUFFIX}`;
   fs.copyFileSync(target, backupPath);
   removeOldBackups(file);
-  if (fs.statSync(target).nlink > 1) fs.writeFileSync(target, `${JSON.stringify(settings, null, 2)}\n`);
-  else writeJsonAtomic(target, settings, { pretty: true });
+  const { nlink, mode } = fs.statSync(target);
+  if (nlink > 1) fs.writeFileSync(target, `${JSON.stringify(settings, null, 2)}\n`);
+  else writeJsonAtomic(target, settings, { pretty: true, mode: mode & 0o777 });
   return { backupPath };
 }
 
