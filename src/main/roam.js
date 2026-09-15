@@ -31,8 +31,12 @@ function curve(a, b, clamp, random) {
 }
 
 // Plans a trip: out to a spot (with a pause) and back home. Positions are pet-window top-left corners.
-function planRoam({ home, mode, workArea, petSize, clamp, groundY, cursor = null, random = Math.random }) {
+// clamp keeps a stroll's points on screen, wanderClamp a wander's: the two show different poses, with different bounds.
+function planRoam({
+  home, mode, workArea, petSize, clamp: strollClamp, wanderClamp = strollClamp, groundY, cursor = null, random = Math.random,
+}) {
   const wander = mode === 'screen' && random() < WANDER_CHANCE;
+  const clamp = wander ? wanderClamp : strollClamp;
   const minTravel = Math.min(MIN_TRAVEL_PX, workArea.width / 4);
 
   let target = null;
@@ -76,4 +80,6 @@ function roamPose(kind, pausing, { strollPose = 'float', taskbarPose = 'float' }
   return pausing ? 'idle' : 'floatingTravel';
 }
 
-module.exports = { shouldStartRoam, roamDelayMs, planRoam, stepToward, roamPose };
+module.exports = {
+  ROAM_STATES, shouldStartRoam, roamDelayMs, planRoam, stepToward, roamPose,
+};

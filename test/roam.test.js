@@ -70,6 +70,28 @@ test('in screen mode it sometimes floats a curved path somewhere else on screen 
   assert.deepEqual({ x: last.x, y: last.y }, home);
 });
 
+test('a wander is kept on screen with its own bounds, not those of the stroll pose', () => {
+  // A very wide screen, so long trips bow their curves well above the top edge before clamping.
+  const wide = { x: 0, y: 0, width: 5000, height: 1000 };
+  const home = { x: 4800, y: groundY };
+  // The walking pose has a big top margin, so a stroll's points may go well above the screen; floating ones may not.
+  const walkClamp = (p) => ({ x: Math.min(4850, Math.max(0, p.x)), y: Math.min(groundY, Math.max(-75, p.y)) });
+  const floatClamp = (p) => ({ x: Math.min(4850, Math.max(0, p.x)), y: Math.min(groundY, Math.max(-1, p.y)) });
+  let wanders = 0;
+  for (let seed = 0; seed < 200; seed += 1) {
+    let n = seed;
+    const random = () => {
+      n = (n * 9301 + 49297) % 233280;
+      return n / 233280;
+    };
+    const plan = planRoam({ home, mode: 'screen', workArea: wide, petSize, clamp: walkClamp, wanderClamp: floatClamp, groundY, random });
+    if (plan.kind === 'wander') wanders += 1;
+    const check = plan.kind === 'wander' ? floatClamp : walkClamp;
+    for (const w of plan.waypoints) assert.deepEqual(check(w), { x: w.x, y: w.y }, `${plan.kind} point stays in its bounds`);
+  }
+  assert.ok(wanders > 20);
+});
+
 test('planRoam avoids ending up right where the cursor is', () => {
   const home = { x: 100, y: groundY };
   // first candidate lands under the cursor, the second one is clear

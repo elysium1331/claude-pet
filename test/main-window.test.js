@@ -11,6 +11,7 @@ const path = require('node:path');
 const MAIN = require.resolve('../src/main/main.js');
 const ELECTRON = require.resolve('electron');
 const WORK_AREA = { x: 0, y: 0, width: 1920, height: 1032 };
+const MAIN_DISPLAY = { id: 1, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: WORK_AREA };
 const FAR = { x: 1900, y: 100 };
 
 class FakeWindow extends EventEmitter {
@@ -88,7 +89,7 @@ function fakeElectron(tmp) {
   const appEvents = new EventEmitter();
   const fake = {
     windows: [], ipc: {}, popups: [], quits: 0, exitCode: undefined, clipboard: null, tray: null,
-    cursor: { ...FAR }, idleSeconds: 0,
+    cursor: { ...FAR }, idleSeconds: 0, displays: [MAIN_DISPLAY], screenEvents: new EventEmitter(),
   };
   fake.electron = {
     app: {
@@ -138,9 +139,9 @@ function fakeElectron(tmp) {
     net: { fetch() {} },
     screen: {
       getCursorScreenPoint: () => ({ ...fake.cursor }),
-      getDisplayNearestPoint: () => ({ workArea: WORK_AREA }),
-      getPrimaryDisplay: () => ({ workArea: WORK_AREA }),
-      on() {},
+      getAllDisplays: () => fake.displays.map((display) => structuredClone(display)), // fresh objects, like Electron's
+      getPrimaryDisplay: () => structuredClone(fake.displays[0]),
+      on: (event, fn) => fake.screenEvents.on(event, fn),
     },
     shell: { openExternal() {}, openPath() {} },
     powerMonitor: { getSystemIdleTime: () => fake.idleSeconds, on() {} },
@@ -159,13 +160,17 @@ function menuItem(template, label) {
   return null;
 }
 
-async function startMain(t, { idleSeconds = 0 } = {}) {
+async function startMain(t, {
+  idleSeconds = 0, argv = [], displays = [MAIN_DISPLAY], config = {}, files = {},
+} = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-pet-main-'));
   const profile = path.join(tmp, 'claude-pet-snapshot');
   fs.mkdirSync(profile);
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ credentialsPath: path.join(tmp, 'none.json') }));
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ credentialsPath: path.join(tmp, 'none.json'), ...config }));
+  for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(tmp, name), content);
   const fake = fakeElectron(tmp);
   fake.idleSeconds = idleSeconds;
+  fake.displays = displays;
   const errors = [];
   const saved = {
     argv: process.argv,
@@ -193,7 +198,7 @@ async function startMain(t, { idleSeconds = 0 } = {}) {
   require.cache[ELECTRON] = electronModule;
   delete require.cache[MAIN];
   process.argv = [process.execPath, 'main', `--snapshot=${path.join(tmp, 'snapshot.png')}`, '--snapshot-delay=100000000',
-    '--claude-running=true'];
+    '--claude-running=true', ...argv.map((arg) => arg.replaceAll('<tmp>', tmp))];
   try {
     require(MAIN);
   } finally {
@@ -527,5 +532,167 @@ test('a drag whose release is lost (hidden mid-drag, or the menu opens) is dropp
   assert.equal(app.fake.popups.length, 1);
   pressIsOver();
   app.send('pet:drag-end'); // arrives late from the renderer: nothing left to end
+  assert.deepEqual(app.errors, []);
+});
+
+// ---------- movement and placement ----------
+
+const FOX = require('../pets/celestial-fox/pet.json');
+const LEFT_DISPLAY = {
+  id: 2, bounds: { x: -1920, y: 0, width: 1920, height: 1080 }, workArea: { x: -1920, y: 0, width: 1920, height: 1032 },
+};
+const UPPER_DISPLAY = { id: 3, bounds: { x: 0, y: -1080, width: 1920, height: 1080 }, workArea: { x: 0, y: -1080, width: 1920, height: 1080 } };
+
+// Top of a pet box of this height whose body, in this pose, rests on the bottom of the work area.
+const groundTop = (pose, height = 160, workArea = WORK_AREA) => {
+  const insets = FOX.stateInsets[pose] ?? FOX.bodyInsets;
+  return Math.round(workArea.y + workArea.height - height + insets.right.bottom * height);
+};
+
+test('"Go for a stroll now" is unavailable, and does nothing, while the pet has something else on its mind', async (t) => {
+  const raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'usage-response.json'), 'utf8'));
+  raw.seven_day.utilization = 95;
+  raw.limits.find((limit) => limit.kind === 'weekly_all').percent = 95;
+  const app = await startMain(t, { argv: ['--fake-usage=<tmp>/usage.json'], files: { 'usage.json': JSON.stringify(raw) } });
+  app.tick(1100);
+  assert.equal(app.status().petState, 'lowUsage');
+  const before = app.petWin.getBounds();
+  assert.equal(menuItem(app.trayMenu(), 'Go for a stroll now').enabled, false);
+  app.clickMenu('Go for a stroll now'); // e.g. chosen from a menu opened just before
+  assert.equal(app.status().roaming, false);
+  app.tick(1500);
+  assert.deepEqual(app.petWin.getBounds(), before);
+  assert.deepEqual(app.errors, []);
+});
+
+test('changing the size during a trip sends the pet home, onto the ground for its new size', async (t) => {
+  const app = await startMain(t);
+  app.tick(1100);
+  const home = app.petWin.getBounds();
+  app.clickMenu('Go for a stroll now');
+  app.tick(1500);
+  assert.notDeepEqual(app.petWin.getBounds(), home);
+  app.clickMenu('Extra large');
+  assert.equal(app.status().roaming, false);
+  app.tick(2000);
+  const after = app.petWin.getBounds();
+  assert.equal(after.height, 240);
+  assert.equal(after.y, groundTop('idle', 240));
+  assert.ok(Math.abs(after.x + after.width / 2 - (home.x + home.width / 2)) <= 1, 'home, measured from its bottom center');
+  assert.deepEqual(app.errors, []);
+});
+
+test('a pet that lies down during a trip settles onto the ground for lounging once it is home', async (t) => {
+  // In the middle of the screen, so arriving home never turns it around (which used to be the only thing that settled it).
+  const app = await startMain(t, { argv: ['--start-at=885,882'] });
+  app.tick(175_000);
+  assert.equal(app.status().petState, 'idle');
+  app.clickMenu('Go for a stroll now');
+  app.tick(10_000); // lies down (3 minutes untouched) along the way
+  assert.equal(app.status().petState, 'lounging');
+  for (let waited = 0; app.status().roaming && waited < 60_000; waited += 1000) app.tick(1000);
+  assert.equal(app.status().roaming, false);
+  app.tick(3000);
+  assert.equal(app.status().shownPose, 'lounging');
+  assert.equal(app.petWin.getBounds().y, groundTop('lounging'));
+  assert.deepEqual(app.errors, []);
+});
+
+test('a trip on a monitor that is unplugged ends with the pet home on a screen that is still there', async (t) => {
+  const app = await startMain(t, { displays: [MAIN_DISPLAY, LEFT_DISPLAY], argv: ['--start-at=-1000,882'] });
+  app.tick(1100);
+  assert.deepEqual(app.petWin.getBounds(), { x: -1000, y: 882, width: 150, height: 160 });
+  app.clickMenu('Go for a stroll now');
+  app.tick(1500);
+  app.fake.displays = [MAIN_DISPLAY];
+  app.fake.screenEvents.emit('display-removed');
+  assert.equal(app.status().roaming, false);
+  app.tick(3000);
+  const { x, y } = app.petWin.getBounds();
+  assert.equal(y, groundTop('idle'));
+  assert.ok(x >= -18 && x + 150 - 18 <= 1920, `body on the main display (x ${x})`);
+  assert.deepEqual(app.errors, []);
+});
+
+test('dragging the pet onto the next monitor moves it smoothly, with no bonks or landings at the seam', async (t) => {
+  const app = await startMain(t, { displays: [MAIN_DISPLAY, LEFT_DISPLAY, UPPER_DISPLAY] });
+  app.tick(1100);
+  app.fake.cursor = app.bodyCenter();
+  app.send('pet:press');
+  app.send('pet:drag-start');
+  const dragThrough = (points) => {
+    for (const point of points) {
+      const before = app.petWin.getBounds();
+      app.fake.cursor = point;
+      app.send('pet:drag-move');
+      app.tick(20);
+      const after = app.petWin.getBounds();
+      const moved = Math.hypot(after.x - before.x, after.y - before.y);
+      assert.ok(moved <= 11, `moved ${moved}px for a 10px drag at ${JSON.stringify(point)}`);
+    }
+  };
+  app.fake.cursor = { x: 99, y: 500 };
+  app.send('pet:drag-move');
+  // left across x = 0, then back, then up across y = 0
+  dragThrough(Array.from({ length: 40 }, (_, i) => ({ x: 99 - 10 * i, y: 500 })));
+  dragThrough(Array.from({ length: 40 }, (_, i) => ({ x: -291 + 10 * i, y: 500 })));
+  dragThrough(Array.from({ length: 52 }, (_, i) => ({ x: 99, y: 500 - 10 * i })));
+  assert.equal(count(app.reactions(), 'bonk'), 0);
+  app.send('pet:drag-end'); // the body straddles the two monitors, over no taskbar
+  app.tick(1000);
+  assert.equal(count(app.reactions(), 'land'), 0);
+  assert.equal(app.status().grounded, false);
+  assert.ok(app.petWin.getBounds().y < 0 && app.petWin.getBounds().y + 80 > -20, 'left where it was dropped');
+  assert.deepEqual(app.errors, []);
+});
+
+test('chasing the cursor onto another monitor never jumps the pet across the seam', async (t) => {
+  const app = await startMain(t, { displays: [MAIN_DISPLAY, LEFT_DISPLAY, UPPER_DISPLAY] });
+  app.tick(1100);
+  for (const cursor of [{ x: -900, y: 500 }, { x: 200, y: -500 }]) {
+    app.fake.cursor = cursor;
+    app.clickMenu('Chase my cursor');
+    let before = app.petWin.getBounds();
+    for (let i = 0; i < 100; i += 1) {
+      app.tick(30);
+      const after = app.petWin.getBounds();
+      assert.ok(Math.hypot(after.x - before.x, after.y - before.y) <= 16, `one chase step from ${JSON.stringify(before)} to ${JSON.stringify(after)}`);
+      before = after;
+    }
+    app.tick(8000); // the chase gives up
+  }
+  assert.deepEqual(app.errors, []);
+});
+
+test('with the taskbar hidden, the pet rests just above the bottom of the screen, clear of the strip that reveals it', async (t) => {
+  const bounds = { x: 0, y: 0, width: 1920, height: 1080 };
+  const app = await startMain(t, { displays: [{ id: 1, bounds, workArea: bounds }] });
+  app.tick(1100);
+  const pet = app.petWin.getBounds();
+  assert.equal(pet.y, groundTop('idle', 160, bounds) - 4);
+  const hit = app.hitWin.getBounds();
+  assert.ok(hit.y + hit.height <= 1076, 'the hit area over the body stays off the last rows of the screen');
+  const status = app.status();
+  assert.equal(status.grounded, true);
+  assert.equal(status.taskbarEdge, null);
+  assert.deepEqual(app.errors, []);
+});
+
+test('the stats panel changes sides with the card when it grows past the room above the pet', async (t) => {
+  const app = await startMain(t, { argv: ['--start-at=885,250'] });
+  app.tick(1100);
+  const panelSent = (channel) => app.panelWin.webContents.sent.filter(([name]) => name === channel).map(([, payload]) => payload);
+  app.send('pet:click');
+  app.tick(1000);
+  assert.deepEqual(panelSent('panel:open'), ['above']);
+  assert.deepEqual(app.sent('pet:stats').at(-1), { open: true, side: 'above' });
+
+  app.fake.ipc['panel:size']({ sender: app.panelWin.webContents }, { width: 244, height: 300 }); // the usage arrived
+  assert.deepEqual(panelSent('panel:open'), ['above', 'below']);
+  assert.deepEqual(app.sent('pet:stats').at(-1), { open: true, side: 'below' });
+  assert.ok(app.panelWin.getBounds().y > app.petWin.getBounds().y + 80, 'the panel is below the pet');
+
+  app.fake.ipc['panel:size']({ sender: app.panelWin.webContents }, { width: 244, height: 300 });
+  assert.equal(panelSent('panel:open').length, 2, 'nothing more to say while it stays on that side');
   assert.deepEqual(app.errors, []);
 });

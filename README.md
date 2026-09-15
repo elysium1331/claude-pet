@@ -9,6 +9,8 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 ## What it does
 
 - Sits on your taskbar (bottom-left by default). Drag it anywhere; it stays on screen and snaps back onto the taskbar when you drop it near it.
+- If your taskbar is at the top or side, hides itself, or isn't on that monitor, the bottom of the screen is its ground instead. It keeps a few pixels clear of the screen edges so a hidden taskbar can still slide out, though a taskbar that slides out can cover it; drag it aside if it's in the way.
+- With more than one monitor it can sit across the seam and move from one to the next where they meet. A monitor's bottom edge is only ground where no monitor continues below it, so a pet that lies down on the upper of two stacked monitors drifts down to the taskbar below.
 - The three orbs orbiting the pet are your meters: one dot = session, two = weekly, three = your per-model weekly limit (e.g. Fable). Their rings fill and turn amber, then red, as you use more.
 - Click the pet to open the full stats: percentages, bars, reset times and countdowns. Click again, or anywhere else, to close. Only the pet itself takes clicks and touches: the see-through space around it passes them to whatever is underneath.
 - Left alone for a few minutes with Claude quiet, it drifts down to the taskbar and lounges. When Claude gets busy it perks up: Claude Code shows its working poses right away, and other use like Claude chat (noticed when your usage goes up) keeps it awake and attentive for a few minutes. It sleeps when you're away from the computer or the Claude app isn't running, and checks usage less often while it naps.
@@ -17,11 +19,11 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 
 ## Playing with it
 
-- **Drag** it around: it dangles and leans, bonks if you push it into a screen edge, gets dizzy if you shake it, and lands when you drop it on the taskbar (where it sits).
+- **Drag** it around: it dangles and leans, bonks if you push it into a screen edge (not where two monitors meet), gets dizzy if you shake it, and lands when you drop it on the taskbar (where it sits).
 - **Rub** the cursor back and forth over it to pet it.
 - **Double-click** for a trick; **triple-click** to tickle it.
 - Right-click → **Play**: feed it a spark, have it chase your cursor, or ask for a trick. The same menu shows its happiness and level.
-- **Free roam**: every 10–25 minutes, when nothing's going on, it takes a little trip along the taskbar (or, if you allow it, somewhere on screen), pauses to look around, and comes back. It waits for your cursor to move out of its way, heads home if Claude needs you, and clicking it calls it home. Choose off / along the taskbar / anywhere on screen under right-click → **Play**, or send it on a stroll right away.
+- **Free roam**: every 10–25 minutes, when nothing's going on, it takes a little trip along the taskbar (or, if you allow it, somewhere on screen), pauses to look around, and comes back. It waits for your cursor to move out of its way, heads home if Claude needs you, and clicking it calls it home. Changing its size or your monitors during a trip also sends it home. Choose off / along the taskbar / anywhere on screen under right-click → **Play**, or send it on a stroll right away (available while it's idle, sitting or lounging).
 - Playing and finished Claude Code tasks raise its happiness and experience; ignored for hours, it gets a little droopy.
 - It grows as it levels up (level 1 at 30 XP, 2 at 120, 3 at 300): longer tail wisps, then an extra antenna pearl and brighter stars, then a soft halo and crown.
 - Right-click → **Appearance** to pick a color theme (celestial blue, rose gold, mint aqua, violet silver) and the night glow: softer light between 10 PM and 7 AM by default, or always / never. The usage orbs keep their colors in every theme.

@@ -72,8 +72,10 @@ function render(view) {
 window.panelHost.onView(render);
 
 window.panelHost.onOpen((side) => {
-  document.body.classList.remove('open', 'above', 'below');
+  const moving = document.body.classList.contains('open'); // already open: it moved to the other side of the pet
+  document.body.classList.remove('above', 'below');
   document.body.classList.add(side);
+  if (moving) return; // grows and shrinks from the new edge from now on, without growing again
   void card.offsetWidth; // restart the grow animation
   document.body.classList.add('open');
 });

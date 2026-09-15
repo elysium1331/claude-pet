@@ -21,7 +21,8 @@ const {
   levelFor, colorForPercent, choosePetState, formatReset, formatCountdown, formatAgo, pickScoped, usageAsOf,
 } = require('./usage-parse');
 const {
-  clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
+  ZERO_INSETS, clampPet, displayLimits, groundBelow, nearestDisplay, taskbarEdge, combinedInsets, panelPlacement,
+  chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
 } = require('./placement');
 const { pointerPlan, hitAreaBounds } = require('./click-through');
 const {
@@ -36,7 +37,7 @@ const hooksPlan = require('./hooks-plan');
 const { classifyClicks, StrokeDetector, edgeBump } = require('./gestures');
 const petLife = require('./pet-life');
 const {
-  shouldStartRoam, planRoam, stepToward, roamDelayMs, roamPose: poseForRoam,
+  ROAM_STATES, shouldStartRoam, planRoam, stepToward, roamDelayMs, roamPose: poseForRoam,
 } = require('./roam');
 
 const ROOT = path.join(__dirname, '..', '..'); // inside app.asar (read-only) in the installed build
@@ -57,7 +58,6 @@ const CHASE_MS = 8000;
 const CHASE_STEP_PX = 14;
 const BONK_COOLDOWN_MS = 1500;
 const ROAM_STEP_MS = 30;
-const ROAM_OK_STATES = new Set(['idle', 'sitting', 'lounging']);
 const GREET_DELAY_MS = 2500; // lets the appear sparkle or the wake-up hop finish before waving hello
 
 const args = parseArgs(process.argv);
@@ -109,6 +109,8 @@ let hideTimer = null;
 let greetAt = 0; // when to try the daily greeting (0: not until the pet is shown or wakes)
 
 let statsOpen = false;
+let statsSide = 'above'; // which side of the pet the open stats are on
+let panelShown = false; // the panel was told to open, and grows from the side nearest the pet
 let panelSize = { width: 212, height: 180 };
 let statsTimers = [];
 
@@ -319,8 +321,11 @@ function setPetScale(scale) {
   persistConfig({ petScale: scale });
   closeStats();
   cancelGlide();
+  // A trip under way was planned for the old size: head home, to where home is at the new size.
+  if (roam) roam.home = resizeAnchored(roam.home, oldSize, PET_SIZE);
   setPetBounds(resizeAnchored(petPos, oldSize, PET_SIZE));
-  settlePet();
+  if (roam) cancelRoam({ returnHome: true });
+  else settlePet();
   refreshTrayMenu();
 }
 
@@ -633,6 +638,7 @@ function statusSnapshot() {
     claudeAppRunning: claudeRunning,
     usageStatus: usage?.snapshot.status,
     grounded,
+    taskbarEdge: petPos ? taskbarEdge(layoutAt(petCenter()).display) : null, // null: hidden, or not on the pet's display
     statsOpen,
     roaming: !!roam,
     visible: petVisible(),
@@ -691,16 +697,12 @@ function tick() {
     if (wokeUp(petState, next)) greetAt = now + GREET_DELAY_MS; // a pet that started asleep says hello once awake
     petState = next;
     pushView();
-    if (!chase && !drag && !roam) {
-      // Poses occupy different parts of the pet box, so settle into the new pose's bounds.
-      if (displayState() === 'lounging' && config.loungeOnTaskbar) glideToGround();
-      else settlePet();
-    }
+    if (!chase && !drag && !roam) settleIntoPose(); // a trip settles when it ends
   } else if (now - lastViewPush > VIEW_REFRESH_MS) {
     pushView(); // keeps reset countdowns fresh
   }
 
-  if (roam && !ROAM_OK_STATES.has(petState)) {
+  if (roam && !ROAM_STATES.has(petState)) {
     cancelRoam({ returnHome: true }); // Claude needs attention, a limit was hit, etc.
   } else if (!roam && shouldStartRoam({
     mode: config.roam,
@@ -787,7 +789,7 @@ function chaseStep() {
     pushView();
   }
   const step = Math.min(CHASE_STEP_PX, distance);
-  movePet({ x: Math.round(petPos.x + (dx / distance) * step), y: Math.round(petPos.y + (dy / distance) * step) }, workAreaAt(cursor));
+  movePet({ x: Math.round(petPos.x + (dx / distance) * step), y: Math.round(petPos.y + (dy / distance) * step) });
 }
 
 function endChase(caught) {
@@ -812,25 +814,38 @@ function roamPose() {
   return poseForRoam(roam.plan.kind, roam.pauseUntil > 0, config);
 }
 
+// Body bounds that keep every pose a kind of trip shows on screen ('stroll' or 'wander': on the move and pausing),
+// whichever way the pet turns on the way.
+function tripInsets(kind) {
+  const poses = [false, true].map((pausing) => resolveState(pet, poseForRoam(kind, pausing, config)));
+  return combinedInsets(poses.flatMap((pose) => [1, -1].flatMap((direction) => {
+    const insets = insetsForState(pet, pose, direction) || ZERO_INSETS;
+    return [insets, mirrorInsets(insets, true)];
+  })));
+}
+
 function startRoam() {
-  if (roam || chase || drag || !petVisible()) return;
+  // The tick would call a trip in any other state straight back home.
+  if (roam || chase || drag || !petVisible() || !ROAM_STATES.has(petState)) return;
   closeStats();
   cancelGlide();
-  const workArea = workAreaAt(petCenter());
-  // Plan with the travel pose's bounds, so e.g. a floating tail doesn't dip into the taskbar.
-  const travelPose = resolveState(pet, poseForRoam('stroll', false, config));
-  const options = { petSize: PET_SIZE, insets: insetsForState(pet, travelPose, facing), workArea, snapPx: SNAP_PX };
-  const clamp = (p) => {
-    const placed = clampPet(p, { ...options, snapPx: 0 });
-    return { x: placed.x, y: placed.y };
+  const layout = layoutAt(petCenter());
+  // Plan with the bounds of the poses shown, so e.g. a floating tail doesn't dip into the taskbar.
+  const clampFor = (kind) => {
+    const options = { petSize: PET_SIZE, insets: tripInsets(kind), ...displayLimits(layout.display, layout.displays) };
+    return (p) => {
+      const placed = clampPet(p, options);
+      return { x: placed.x, y: placed.y };
+    };
   };
   const plan = planRoam({
     home: { ...petPos },
     mode: config.roam === 'off' ? 'taskbar' : config.roam,
-    workArea,
+    workArea: layout.display.workArea,
     petSize: PET_SIZE,
-    clamp,
-    groundY: clampPet({ x: petPos.x, y: Number.MAX_SAFE_INTEGER }, options).y,
+    clamp: clampFor('stroll'),
+    wanderClamp: clampFor('wander'),
+    groundY: groundBelow(petPos.x, { petSize: PET_SIZE, insets: tripInsets('stroll'), ...layout }).y,
     cursor: screen.getCursorScreenPoint(),
   });
   const wasResting = petState === 'lounging';
@@ -894,7 +909,13 @@ function finishRoam() {
   scheduleNextRoam();
   pushView();
   playEvent('roamHome');
+  settleAfterTrip();
+}
+
+// Nothing settles the pet during a trip, and its pose may have changed on the way (it lay down, say).
+function settleAfterTrip() {
   updateFacing();
+  settleIntoPose();
 }
 
 // Stops a trip; returns where home was.
@@ -905,7 +926,8 @@ function cancelRoam({ returnHome }) {
   roam = null;
   scheduleNextRoam();
   pushView();
-  if (returnHome) glideTo(home, 500, updateFacing);
+  // Home as it fits now: the pose, the size or the screens may have changed since the trip began.
+  if (returnHome) glideTo(clampPet(home, placementOptions(petCenter(home))), 500, settleAfterTrip);
   return home;
 }
 
@@ -920,8 +942,14 @@ function petCenter(pos = petPos) {
   return { x: Math.round(pos.x + PET_SIZE.width / 2), y: Math.round(pos.y + PET_SIZE.height / 2) };
 }
 
+// The display around a point, with all of them: the pet may cross onto a display next to it (see clampPet).
+function layoutAt(point) {
+  const displays = screen.getAllDisplays();
+  return { display: nearestDisplay(point, displays), displays };
+}
+
 function workAreaAt(point) {
-  return screen.getDisplayNearestPoint(point).workArea;
+  return layoutAt(point).display.workArea;
 }
 
 // Pets with a facing control turn themselves; older pets are mirrored instead.
@@ -938,20 +966,23 @@ function currentInsets() {
   return turnsByItself() ? insets : mirrorInsets(insets, isFlipped());
 }
 
-function placementOptions(workArea) {
-  return { petSize: PET_SIZE, insets: currentInsets(), workArea, snapPx: SNAP_PX };
+// Limits for the current pose of a pet whose box is centered at `point`: the display there is the one it is on,
+// even while a drag or chase heads onto another (where the cursor is doesn't count).
+function placementOptions(point = petCenter()) {
+  const { display, displays } = layoutAt(point);
+  return { petSize: PET_SIZE, insets: currentInsets(), snapPx: SNAP_PX, ...displayLimits(display, displays) };
 }
 
 function setPetBounds(pos) {
   if (!windowAlive(petWin)) return;
   petPos = { x: pos.x, y: pos.y };
   petWin.setBounds({ ...petPos, ...PET_SIZE }); // setBounds keeps transparent windows from growing on scaled displays
-  if (statsOpen) placePanel();
+  if (statsOpen) followWithPanel();
   updatePointer(); // the body may have moved under, or away from, a cursor that stayed still
 }
 
-function movePet(pos, workArea = workAreaAt(petCenter(pos))) {
-  const placed = clampPet(pos, placementOptions(workArea));
+function movePet(pos) {
+  const placed = clampPet(pos, placementOptions(petCenter(pos)));
   grounded = placed.grounded;
   setPetBounds(placed);
   return placed;
@@ -974,9 +1005,11 @@ function flushPetPosition() {
 
 function initialPetPosition() {
   const start = args.startAt || config.petPosition;
-  if (start && Number.isFinite(start.x) && Number.isFinite(start.y)) return start;
+  if (start && Number.isFinite(start.x) && Number.isFinite(start.y)) return clampPet(start, placementOptions(petCenter(start)));
+  // First run: on the ground at the left of the main display.
   const { workArea } = screen.getPrimaryDisplay();
-  return { x: workArea.x + 24, y: workArea.y + workArea.height }; // clamping drops this onto the taskbar
+  const inside = { x: workArea.x + workArea.width / 2, y: workArea.y + workArea.height / 2 };
+  return groundBelow(workArea.x + 24, { petSize: PET_SIZE, insets: currentInsets(), ...layoutAt(inside) });
 }
 
 // Turn toward the middle of the screen after the pet settles somewhere new.
@@ -1018,17 +1051,23 @@ function glideTo(target, duration, onDone) {
 
 // Slide (briefly) into the current pose's on-screen bounds.
 function settlePet() {
-  if (drag || chase) return;
-  const placed = clampPet(petPos, placementOptions(workAreaAt(petCenter())));
+  if (drag || chase || roam) return;
+  const placed = clampPet(petPos, placementOptions());
   grounded = placed.grounded;
   glideTo(placed, 260, savePetPosition);
 }
 
+// Poses occupy different parts of the pet box, so after a pose change settle into the new pose's bounds.
+function settleIntoPose() {
+  if (displayState() === 'lounging' && config.loungeOnTaskbar) glideToGround();
+  else settlePet();
+}
+
 function glideToGround() {
-  if (drag || chase) return;
-  const target = clampPet({ x: petPos.x, y: Number.MAX_SAFE_INTEGER }, placementOptions(workAreaAt(petCenter())));
+  if (drag || chase || roam) return;
+  const target = groundBelow(petPos.x, { petSize: PET_SIZE, insets: currentInsets(), ...layoutAt(petCenter()) });
   const distance = Math.hypot(target.x - petPos.x, target.y - petPos.y);
-  closeStats();
+  if (distance > 0) closeStats(); // the panel would be dragged along
   glideTo(target, Math.min(2200, Math.max(300, distance * 2.2)), () => {
     grounded = true;
     updateFacing();
@@ -1071,8 +1110,7 @@ function baseWindowOptions() {
 }
 
 function createPetWindow() {
-  const start = initialPetPosition();
-  const placed = clampPet(start, placementOptions(workAreaAt(petCenter(start))));
+  const placed = initialPetPosition();
   petPos = { x: placed.x, y: placed.y };
   grounded = placed.grounded;
 
@@ -1150,6 +1188,16 @@ function placePanel() {
   return placed.side;
 }
 
+// Keeps the open panel by the pet. When it has to change sides (the pet moved, or the card grew), the card's grow
+// origin and the pet's stats bubble change sides with it.
+function followWithPanel() {
+  const side = placePanel();
+  if (!statsOpen || side === statsSide) return;
+  statsSide = side;
+  if (windowAlive(petWin)) petWin.webContents.send('pet:stats', { open: true, side });
+  if (panelShown && windowAlive(panelWin)) panelWin.webContents.send('panel:open', side);
+}
+
 function clearStatsTimers() {
   statsTimers.forEach(clearTimeout);
   statsTimers = [];
@@ -1162,13 +1210,15 @@ function openStats() {
   // A glide under way (e.g. a clicked roaming pet heading home) carries on; the panel follows the pet.
   markInteraction();
   clearStatsTimers();
-  const side = placePanel();
-  petWin.webContents.send('pet:stats', { open: true, side });
+  panelShown = false;
+  statsSide = placePanel();
+  petWin.webContents.send('pet:stats', { open: true, side: statsSide });
   statsTimers.push(setTimeout(() => {
     if (!statsOpen || !windowAlive(panelWin)) return;
-    placePanel();
+    followWithPanel();
     panelWin.showInactive();
-    panelWin.webContents.send('panel:open', side);
+    panelWin.webContents.send('panel:open', statsSide);
+    panelShown = true;
   }, pet.timings.statsMergeMs * 0.6));
 }
 
@@ -1176,6 +1226,7 @@ function openStats() {
 function closeStats() {
   if (!statsOpen) return;
   statsOpen = false;
+  panelShown = false;
   lastInteraction = Date.now();
   lastInteractionReason = 'stats panel closed';
   clearStatsTimers();
@@ -1213,7 +1264,7 @@ function hidePet() {
   cancelDrag(); // a hidden window never hears the release
   if (chase) endChase(false);
   const home = cancelRoam({ returnHome: false });
-  if (home) setPetBounds(home); // reappear at home, not mid-trip
+  if (home) movePet(home); // reappear at home, not mid-trip
   // Counts as hidden from now on, so toggling again during the animation shows the pet instead of hiding it twice.
   hiding = true;
   updatePointer(); // a disappearing pet takes no more clicks
@@ -1363,7 +1414,7 @@ function buildMenu() {
         { label: 'Feed a spark', enabled: awake, click: feedPet },
         { label: 'Chase my cursor', enabled: awake, click: startChase },
         { label: 'Do a trick', enabled: awake, click: doTrick },
-        { label: 'Go for a stroll now', enabled: awake && !roam, click: startRoam },
+        { label: 'Go for a stroll now', enabled: awake && !roam && ROAM_STATES.has(petState), click: startRoam },
         { type: 'separator' },
         { label: 'Free roam: off', type: 'radio', checked: config.roam === 'off', click: () => setRoamMode('off') },
         { label: 'Free roam: along the taskbar', type: 'radio', checked: config.roam === 'taskbar', click: () => setRoamMode('taskbar') },
@@ -1522,7 +1573,7 @@ function registerIpc() {
     const cursor = screen.getCursorScreenPoint();
     const now = Date.now();
     const desired = { x: cursor.x - drag.dx, y: cursor.y - drag.dy };
-    const placed = movePet(desired, workAreaAt(cursor));
+    const placed = movePet(desired);
 
     // lean into the drag, and notice being pushed into an edge or shaken
     drag.lean = drag.lean * 0.7 + Math.max(-1, Math.min(1, (cursor.x - drag.lastX) / 25)) * 0.3;
@@ -1593,7 +1644,7 @@ function registerIpc() {
     const height = Math.ceil(Number(size?.height));
     if (!(width > 0 && height > 0)) return;
     panelSize = { width, height };
-    if (statsOpen) placePanel();
+    if (statsOpen) followWithPanel();
   });
 }
 
@@ -1679,7 +1730,9 @@ async function startApp() {
   const reclamp = guarded('keeping the pet on screen', () => {
     pointer.hitBounds = null; // Windows may have resized the hit area for the new display: set its bounds again
     movePet(petPos);
-    updateFacing();
+    // A trip was planned for the old layout, and may lead onto a display that's gone: head home instead.
+    if (roam) cancelRoam({ returnHome: true });
+    else updateFacing();
   });
   screen.on('display-metrics-changed', reclamp);
   screen.on('display-removed', reclamp);
