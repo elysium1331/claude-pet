@@ -117,6 +117,5 @@
       "left": { "top": 0.007, "right": 0.121, "bottom": 0.025, "left": 0.121 }
     },
     "held": { "top": 0.007, "right": 0.121, "bottom": 0.038, "left": 0.121 }
-  },
-  "size": { "width": 560, "height": 600 }
+  }
 }

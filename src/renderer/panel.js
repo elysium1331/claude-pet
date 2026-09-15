@@ -48,7 +48,7 @@ function render(view) {
     rows.replaceChildren(el('div', 'empty', view.status === 'loading' ? 'Checking usage…' : 'No usage data yet'));
   } else {
     rows.replaceChildren(...view.meters.map((m) => {
-      const row = el('div', `row ${m.level}`);
+      const row = el('div', 'row');
       row.style.setProperty('--color', m.color);
       const body = el('div');
       const top = el('div', 'top');

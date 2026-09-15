@@ -4,7 +4,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   parseUsage,
-  levelFor,
   colorForPercent,
   choosePetState,
   formatReset,
@@ -182,14 +181,6 @@ test('colorForPercent blends blue -> yellow -> orange -> red as usage climbs', (
   assert.equal(colorForPercent(100), '#ff4f45');
   assert.equal(colorForPercent(140), '#ff4f45');
   assert.equal(colorForPercent(-5), '#8ec5ff');
-});
-
-test('levelFor matches the orb color bands', () => {
-  assert.equal(levelFor(0), 'calm');
-  assert.equal(levelFor(69.9), 'calm');
-  assert.equal(levelFor(70), 'warm');
-  assert.equal(levelFor(89.9), 'warm');
-  assert.equal(levelFor(90), 'hot');
 });
 
 test('choosePetState picks sleeping / idle / lowUsage / limitReached', () => {

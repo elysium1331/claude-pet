@@ -156,12 +156,6 @@ function colorForPercent(percent) {
   return `#${c0.map((v, k) => Math.round(v + (c1[k] - v) * t).toString(16).padStart(2, '0')).join('')}`;
 }
 
-function levelFor(percent) {
-  if (percent >= 90) return 'hot';
-  if (percent >= 70) return 'warm';
-  return 'calm';
-}
-
 function choosePetState({
   claudeRunning,
   usage,
@@ -232,7 +226,6 @@ module.exports = {
   fillUnknownPercents,
   usageAsOf,
   pickScoped,
-  levelFor,
   colorForPercent,
   choosePetState,
   formatReset,

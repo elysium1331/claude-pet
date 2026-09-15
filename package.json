@@ -5,6 +5,7 @@
   "description": "An animated desktop pet that shows your Claude plan usage at a glance. Unofficial; not affiliated with Anthropic.",
   "main": "src/main/main.js",
   "private": true,
+  "author": "elysium1331",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
@@ -15,6 +16,7 @@
   "build": {
     "appId": "io.github.elysium1331.claudepet",
     "productName": "Claude Pet",
+    "copyright": "Copyright © 2026 elysium1331",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -24,7 +26,8 @@
       "pets/**/*",
       "!pets/**/*-source.zip",
       "!pets/**/state-map.md",
-      "package.json"
+      "package.json",
+      "LICENSE"
     ],
     "win": {
       "target": "nsis",

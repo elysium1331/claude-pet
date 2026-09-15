@@ -20,6 +20,12 @@ test('the bundled celestial fox passes validation unchanged', () => {
   }
 });
 
+test('the bundled celestial fox has no keys the app ignores', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'pets', 'celestial-fox', 'pet.json'), 'utf8'));
+  const pet = sanitizeManifest(manifest);
+  assert.deepEqual(Object.keys(manifest).filter((key) => !(key in pet)), []);
+});
+
 test('sanitizeManifest fills in timings and needs only a file and states', () => {
   const pet = sanitizeManifest(minimal);
   assert.deepEqual(pet, { ...minimal, timings: { disappearMs: 0, goodbyeMs: 0, statsMergeMs: 0 } });

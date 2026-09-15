@@ -18,7 +18,7 @@ const { defaultCredentialsPath } = require('./claude-auth');
 const { UsageService } = require('./usage-service');
 const { isClaudeRunning } = require('./claude-process');
 const {
-  levelFor, colorForPercent, choosePetState, formatReset, formatCountdown, formatAgo, pickScoped, usageAsOf,
+  colorForPercent, choosePetState, formatReset, formatCountdown, formatAgo, pickScoped, usageAsOf,
 } = require('./usage-parse');
 const {
   ZERO_INSETS, clampPet, displayLimits, groundBelow, nearestDisplay, taskbarEdge, combinedInsets, panelPlacement,
@@ -371,7 +371,6 @@ function buildView() {
     label: m.label,
     mark: i + 1, // matches the 1/2/3 dots on the pet's orbs
     percent: Math.round(m.percent),
-    level: levelFor(m.percent),
     color: colorForPercent(m.percent),
     resetText: formatReset(m.resetsAt, now),
     countdown: formatCountdown(m.resetsAt, now),
