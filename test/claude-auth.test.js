@@ -116,7 +116,7 @@ test('a saved login whose tokens are not plain visible text counts as signed out
     [{}, true],
     [{ refreshToken: '' }, true], // blanked by Claude Code
     [{ refreshToken: null }, true],
-    [{ accessToken: 'sk-ant-oat01-SECRET\nx' }, false],
+    [{ accessToken: 'fake-token-SECRET\nx' }, false],
     [{ accessToken: 'A 1' }, false],
     [{ accessToken: '' }, false],
     [{ refreshToken: 'R\u0000' }, false],

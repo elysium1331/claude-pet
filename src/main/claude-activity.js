@@ -8,6 +8,9 @@ const PRIORITY = { [WAITING]: 3, [BUSY]: 2, [THINKING]: 1 };
 const MAX_SESSIONS = 64;
 const MAX_ID_LENGTH = 128;
 const MAX_TRACKED = 32; // running tools and open permission prompts remembered per session
+// Hooks are separate background curl processes, so a tool's events can arrive just after the turn's Stop. Events
+// this soon after a session ended belong to that turn and must not bring it back.
+const ENDED_GRACE_MS = 5_000;
 
 function isIdleNotification(payload) {
   return payload.notification_type === 'idle_prompt' || /waiting for your input/i.test(payload.message || '');
@@ -54,6 +57,23 @@ class ClaudeActivity {
     this.waitingStaleMs = waitingStaleMs;
     this.maxSessions = maxSessions;
     this.sessions = new Map();
+    this.ended = new Map(); // session id -> when it ended, kept briefly to recognise late events
+  }
+
+  endSession(id, t) {
+    this.sessions.delete(id);
+    this.ended.delete(id);
+    this.ended.set(id, t);
+    if (this.ended.size > this.maxSessions) this.ended.delete(this.ended.keys().next().value);
+  }
+
+  // A late event from a turn that already ended (it lost the race with Stop or the idle prompt).
+  endedRecently(id, t) {
+    const endedAt = this.ended.get(id);
+    if (endedAt === undefined) return false;
+    if (t - endedAt < ENDED_GRACE_MS) return true;
+    this.ended.delete(id);
+    return false;
   }
 
   // The session an event belongs to, created if needed. The oldest session makes room when there are too many.
@@ -64,7 +84,7 @@ class ClaudeActivity {
         const [oldest] = [...this.sessions].reduce((a, b) => (b[1].lastEventAt < a[1].lastEventAt ? b : a));
         this.sessions.delete(oldest);
       }
-      session = { status: THINKING, turnStartedAt: t, lastEventAt: t, tools: new Map(), prompts: [] };
+      session = { status: THINKING, turnStartedAt: t, lastEventAt: t, tools: new Map(), finished: new Set(), prompts: [] };
       this.sessions.set(id, session);
     }
     session.lastEventAt = t;
@@ -87,15 +107,22 @@ class ClaudeActivity {
     const t = this.now();
     const previous = this.sessions.get(id);
 
+    const lateForEndedTurn = !['UserPromptSubmit', 'Stop', 'SessionEnd'].includes(event)
+      && !(event === 'Notification' && isIdleNotification(payload))
+      && this.endedRecently(id, t);
+    if (lateForEndedTurn) return event === 'PostToolUseFailure' ? ['error'] : [];
+
     switch (event) {
       case 'UserPromptSubmit': {
+        this.ended.delete(id);
         const session = this.touch(id, t);
-        Object.assign(session, { status: THINKING, turnStartedAt: t, tools: new Map(), prompts: [] });
+        Object.assign(session, { status: THINKING, turnStartedAt: t, tools: new Map(), finished: new Set(), prompts: [] });
         return [];
       }
       case 'PreToolUse': {
         const session = this.touch(id, t);
         const toolUseId = shortText(payload.tool_use_id);
+        if (toolUseId && session.finished.has(toolUseId)) return []; // its PostToolUse already arrived
         if (toolUseId) {
           session.tools.set(toolUseId, { key: toolKey(payload), hash: inputHash(payload) });
           if (session.tools.size > MAX_TRACKED) session.tools.delete(session.tools.keys().next().value);
@@ -107,7 +134,11 @@ class ClaudeActivity {
       case 'PostToolUseFailure': {
         const session = this.touch(id, t);
         const toolUseId = shortText(payload.tool_use_id);
-        if (toolUseId) session.tools.delete(toolUseId);
+        if (toolUseId) {
+          session.tools.delete(toolUseId);
+          session.finished.add(toolUseId);
+          if (session.finished.size > MAX_TRACKED) session.finished.delete(session.finished.values().next().value);
+        }
         const approved = takePrompt(session.prompts, toolKey(payload), toolUseId);
         if (!session.prompts.length) session.status = THINKING;
         const reactions = approved ? ['approve'] : [];
@@ -129,7 +160,7 @@ class ClaudeActivity {
         // Claude Code sends idle_prompt when a turn is over and nothing is happening, including after you press
         // Esc or deny a permission, which don't send Stop.
         if (isIdleNotification(payload)) {
-          this.sessions.delete(id);
+          this.endSession(id, t);
           return [];
         }
         const session = this.touch(id, t);
@@ -139,10 +170,10 @@ class ClaudeActivity {
         return ['alert'];
       }
       case 'Stop':
-        this.sessions.delete(id);
+        this.endSession(id, t);
         return previous && t - previous.turnStartedAt >= this.celebrateAfterMs ? ['taskDone'] : [];
       case 'SessionEnd':
-        this.sessions.delete(id);
+        this.endSession(id, t);
         return [];
       default:
         return [];

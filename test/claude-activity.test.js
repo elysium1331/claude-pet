@@ -130,13 +130,53 @@ test('a Notification that arrives before its PermissionRequest still rings once 
   assert.deepEqual(activity.handle('PostToolUse', { session_id: 'a', tool_name: 'Bash' }), ['approve']);
 });
 
-test('odd payloads never throw', () => {
+// Hooks run as separate background curl processes, so events can reach the pet slightly out of order.
+test('late events from a turn that already ended do not bring it back', () => {
+  const { activity, advance } = tracker();
+  activity.handle('UserPromptSubmit', { session_id: 'a' });
+  activity.handle('PreToolUse', { session_id: 'a', tool_name: 'Read', tool_use_id: 'r1' });
+  assert.deepEqual(activity.handle('Stop', { session_id: 'a' }), []);
+  advance(300);
+  // the tool's events lose the race with Stop
+  assert.deepEqual(activity.handle('PostToolUse', { session_id: 'a', tool_name: 'Read', tool_use_id: 'r1' }), []);
+  assert.deepEqual(activity.handle('PreToolUse', { session_id: 'a', tool_name: 'Read', tool_use_id: 'r2' }), []);
+  assert.deepEqual(activity.handle('PostToolUseFailure', { session_id: 'a', tool_name: 'Read', tool_use_id: 'r2' }), ['error']);
+  assert.equal(activity.summary(), null);
+
+  // after the grace period the same session can get busy again (e.g. a background task)
+  advance(6_000);
+  activity.handle('PreToolUse', { session_id: 'a', tool_name: 'Bash', tool_use_id: 'b1' });
+  assert.equal(activity.summary(), 'busy');
+});
+
+test('a new prompt right after a turn ended is tracked straight away', () => {
+  const { activity, advance } = tracker();
+  activity.handle('UserPromptSubmit', { session_id: 'a' });
+  activity.handle('Stop', { session_id: 'a' });
+  advance(500);
+  activity.handle('UserPromptSubmit', { session_id: 'a' });
+  assert.equal(activity.summary(), 'thinking');
+  activity.handle('PreToolUse', { session_id: 'a', tool_name: 'Bash', tool_use_id: 'b1' });
+  assert.equal(activity.summary(), 'busy');
+});
+
+test("a tool's start arriving after its finish doesn't leave the pet busy", () => {
   const { activity } = tracker();
+  activity.handle('UserPromptSubmit', { session_id: 'a' });
+  activity.handle('PostToolUse', { session_id: 'a', tool_name: 'Read', tool_use_id: 'r1' });
+  activity.handle('PreToolUse', { session_id: 'a', tool_name: 'Read', tool_use_id: 'r1' });
+  assert.equal(activity.summary(), 'thinking');
+  assert.equal(activity.sessions.get('a').tools.size, 0);
+});
+
+test('odd payloads never throw', () => {
+  const { activity, advance } = tracker();
   for (const payload of [null, undefined, 42, 'text', [], { session_id: 12345 }, { session_id: { a: 1 } }, { session_id: '' }]) {
     for (const event of ['UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'Notification', 'Stop', 'SessionEnd']) {
       activity.handle(event, payload);
     }
   }
+  advance(6_000); // past the window in which events right after SessionEnd count as late
   activity.handle('PreToolUse', { session_id: 12345 });
   assert.deepEqual([...activity.sessions.keys()], ['default']);
   assert.equal(activity.summary(), 'busy');

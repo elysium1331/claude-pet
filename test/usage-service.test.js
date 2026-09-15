@@ -87,7 +87,7 @@ test('a failed check logs only the kind of error, never its message, which can q
   const headerError = async (url, { headers }) => {
     throw new TypeError(`Headers.append: "${headers.Authorization}" is an invalid header value.`);
   };
-  const s = service({ login: fakeLogin({ ...GOOD, accessToken: 'sk-ant-oat01-SECRET\nx' }), fetch: headerError, log });
+  const s = service({ login: fakeLogin({ ...GOOD, accessToken: 'fake-token-SECRET\nx' }), fetch: headerError, log });
   await s.poll();
   assert.equal(s.snapshot.message, 'Could not reach Claude');
 
