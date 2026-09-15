@@ -4,6 +4,7 @@ const {
   insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, shouldGreet, restingPose, isNightTime,
   resolveState, usageRose,
 } = require('../src/main/behavior');
+const { parseUsage } = require('../src/main/usage-parse');
 
 test('resolveState falls back to the closest pose a pet file actually has', () => {
   const fox = { states: { idle: 0, sleeping: 1, working: 2, needsAttention: 3, chasing: 12, sitting: 13 } };
@@ -83,9 +84,29 @@ test('fidgetsFor only offers fidgets that fit the current pose (idle by default)
 });
 
 const meters = (session, weekly, fable) => ({
-  session: { percent: session },
-  weekly: { percent: weekly },
-  scoped: [{ label: 'Fable', percent: fable }],
+  session: { id: 'session', percent: session },
+  weekly: { id: 'weekly', percent: weekly },
+  scoped: [{ id: 'scoped:Fable', label: 'Fable', percent: fable }],
+});
+
+test('usage events compare each scoped meter with its own previous value, even when names repeat', () => {
+  const unnamed = (a, b) => parseUsage({ limits: [{ kind: 'weekly_scoped', percent: a, scope: null }, { kind: 'weekly_scoped', percent: b, scope: {} }] });
+  assert.deepEqual(usageEvents(unnamed(50, 100), unnamed(50, 100)), []);
+  assert.equal(usageRose(unnamed(10, 40), unnamed(10, 40)), false);
+  const opus = (code, chat) => parseUsage({
+    limits: [
+      { kind: 'weekly_scoped', percent: code, scope: { model: 'Opus', surface: 'code' } },
+      { kind: 'weekly_scoped', percent: chat, scope: { model: 'Opus', surface: 'chat' } },
+    ],
+  });
+  assert.deepEqual(usageEvents(opus(40, 10), opus(40, 10)), []);
+  assert.deepEqual(usageEvents(opus(40, 99), opus(40, 100)), ['limitHit']);
+});
+
+test('a meter with an unknown percent never counts as a reset or as usage going up', () => {
+  const session = (percent) => ({ session: { id: 'session', percent }, weekly: null, scoped: [] });
+  assert.deepEqual(usageEvents(session(85), session(null)), []);
+  assert.equal(usageRose(session(null), session(85)), false);
 });
 
 test('usageEvents spots a limit resetting and a limit being hit', () => {

@@ -1,7 +1,7 @@
 // Adds/removes Claude Pet's HTTP hooks in Claude Code's user settings, leaving everything else untouched.
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
+const { claudeConfigDir } = require('./claude-dir');
 
 const MARKER = '/claude-pet/hook/';
 
@@ -18,8 +18,7 @@ const HOOK_EVENTS = [
 ];
 
 function settingsPath() {
-  const dir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-  return path.join(dir, 'settings.json');
+  return path.join(claudeConfigDir(), 'settings.json');
 }
 
 function isPetHook(hook) {

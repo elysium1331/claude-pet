@@ -10,6 +10,10 @@ const {
   formatReset,
   formatCountdown,
   formatAgo,
+  hasUsage,
+  fillUnknownPercents,
+  usageAsOf,
+  pickScoped,
 } = require('../src/main/usage-parse');
 const sample = require('./fixtures/usage-response.json');
 
@@ -48,6 +52,104 @@ test('parseUsage clamps percents and tolerates missing or junk data', () => {
   assert.equal(empty.session, null);
   assert.equal(empty.weekly, null);
   assert.deepEqual(empty.scoped, []);
+});
+
+test('parseUsage reads a missing or junk percent as unknown, not 0%', () => {
+  const u = parseUsage({
+    limits: [
+      { kind: 'session', percent: null },
+      { kind: 'weekly_all' },
+      { kind: 'weekly_scoped', percent: 'lots', scope: { model: 'Opus' } },
+    ],
+  });
+  assert.equal(u.session.percent, null);
+  assert.equal(u.weekly.percent, null);
+  assert.equal(u.scoped[0].percent, null);
+  assert.equal(hasUsage(u), false);
+  assert.equal(hasUsage(parseUsage({})), false);
+  assert.equal(hasUsage(parseUsage({ error: { type: 'overloaded' } })), false);
+  assert.equal(hasUsage(parseUsage(sample)), true);
+  assert.equal(parseUsage({ limits: [{ kind: 'session', percent: '42' }] }).session.percent, 42);
+  assert.equal(parseUsage({ limits: [{ kind: 'session', percent: true }] }).session.percent, null);
+  assert.equal(colorForPercent(null), '#8ec5ff');
+});
+
+test('fillUnknownPercents carries the last value forward, or leaves out a meter never seen with a number', () => {
+  const prev = parseUsage(sample);
+  const next = parseUsage({
+    limits: sample.limits.map((l) => (l.kind === 'weekly_all' ? l : { ...l, percent: null })),
+  });
+  const filled = fillUnknownPercents(next, prev);
+  assert.equal(filled.session.percent, 7);
+  assert.equal(filled.weekly.percent, 36);
+  assert.equal(filled.scoped[0].percent, 67);
+  const fresh = fillUnknownPercents(next, null);
+  assert.equal(fresh.session, null);
+  assert.equal(fresh.weekly.percent, 36);
+  assert.deepEqual(fresh.scoped, []);
+});
+
+test('scoped limits always get distinct labels and ids, from string names only', () => {
+  const scoped = (scope, percent) => ({ kind: 'weekly_scoped', percent, scope });
+  const u = parseUsage({
+    limits: [
+      scoped(null, 50),
+      scoped({}, 100),
+      scoped({ model: { display_name: 'Opus' }, surface: { name: 'code' } }, 40),
+      scoped({ model: { display_name: 'Opus' }, surface: 'chat' }, 10),
+      scoped({ model: { display_name: 7, name: 'Fable' } }, 5),
+      scoped({ model: { display_name: 42 } }, 1),
+    ],
+  });
+  assert.deepEqual(u.scoped.map((m) => m.label), ['Scoped', 'Scoped 2', 'Opus (code)', 'Opus (chat)', 'Fable', 'Scoped 3']);
+  assert.equal(new Set(u.scoped.map((m) => m.id)).size, 6);
+  assert.equal(parseUsage(sample).scoped[0].id, 'scoped:Fable');
+});
+
+test('pickScoped finds the configured limit and never throws on odd values', () => {
+  const u = parseUsage({
+    limits: [
+      { kind: 'weekly_scoped', percent: 10, scope: { model: 'Opus', surface: 'code' } },
+      { kind: 'weekly_scoped', percent: 20, scope: { model: 'Opus', surface: 'chat' } },
+    ],
+  });
+  assert.equal(pickScoped(u, 'opus (chat)').percent, 20);
+  assert.equal(pickScoped(u, ' Opus (code) ').percent, 10);
+  assert.equal(pickScoped(u, 42).percent, 10);
+  assert.equal(pickScoped(u, null).percent, 10);
+  assert.equal(pickScoped(null, 'Opus'), null);
+  assert.equal(pickScoped({ scoped: [{ id: 'x', label: 5, percent: 1 }] }, 'fable').id, 'x');
+});
+
+test('usageAsOf shows a meter as reset once its reset time passed after the numbers were fetched', () => {
+  const fetchedAt = new Date('2026-09-14T17:00:00Z');
+  const u = parseUsage({
+    limits: [
+      { kind: 'session', percent: 100, resets_at: '2026-09-14T18:00:00Z' },
+      { kind: 'weekly_all', percent: 36, resets_at: '2026-09-20T21:00:00Z' },
+    ],
+  });
+  const nextDay = new Date('2026-09-15T09:00:00Z');
+  const later = usageAsOf(u, fetchedAt, nextDay);
+  assert.equal(later.session.percent, 0);
+  assert.equal(later.session.resetPassed, true);
+  assert.equal(later.session.resetsAt, null);
+  assert.equal(later.weekly.percent, 36);
+  assert.equal(u.session.percent, 100); // the snapshot itself is not changed
+  assert.equal(usageAsOf(u, fetchedAt, new Date('2026-09-14T17:30:00Z')).session.percent, 100);
+  // the server already knew that reset time when it answered: trust its numbers
+  assert.equal(usageAsOf(u, new Date('2026-09-14T18:01:00Z'), nextDay).session.percent, 100);
+  assert.equal(usageAsOf(u, null, nextDay).session.percent, 0);
+  assert.equal(usageAsOf(null, fetchedAt, nextDay), null);
+  assert.equal(choosePetState({ claudeRunning: true, usage: later }), 'idle');
+  assert.equal(choosePetState({ claudeRunning: true, usage: u }), 'limitReached');
+});
+
+test('choosePetState lets the sign-in prompt win over saved numbers that cannot be checked', () => {
+  const maxed = parseUsage({ limits: [{ kind: 'session', percent: 100 }] });
+  assert.equal(choosePetState({ claudeRunning: true, usage: maxed, needsLogin: true }), 'disconnected');
+  const unknown = parseUsage({ limits: [{ kind: 'session', percent: null }] });
+  assert.equal(choosePetState({ claudeRunning: true, usage: unknown }), 'idle');
 });
 
 test('colorForPercent blends blue -> yellow -> orange -> red as usage climbs', () => {

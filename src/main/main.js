@@ -17,7 +17,9 @@ const { resolveServedFile } = require('./served-files');
 const { defaultCredentialsPath } = require('./claude-auth');
 const { UsageService } = require('./usage-service');
 const { isClaudeRunning } = require('./claude-process');
-const { levelFor, colorForPercent, choosePetState, formatReset, formatCountdown, formatAgo } = require('./usage-parse');
+const {
+  levelFor, colorForPercent, choosePetState, formatReset, formatCountdown, formatAgo, pickScoped, usageAsOf,
+} = require('./usage-parse');
 const {
   clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
 } = require('./placement');
@@ -336,16 +338,11 @@ function displayState() {
   return petState;
 }
 
-function pickScoped(u) {
-  if (!u?.scoped?.length) return null;
-  const wanted = config.scopedLimit?.toLowerCase();
-  return (wanted && u.scoped.find((m) => m.label.toLowerCase() === wanted)) || u.scoped[0];
-}
-
 function buildView() {
-  const { usage: u, status, message, fetchedAt } = usage.snapshot;
+  const { status, message, fetchedAt } = usage.snapshot;
   const now = new Date();
-  const scoped = pickScoped(u);
+  const u = usageAsOf(usage.snapshot.usage, fetchedAt, now);
+  const scoped = pickScoped(u, config.scopedLimit);
   const meters = [u?.session, u?.weekly, scoped].filter(Boolean).map((m, i) => ({
     id: m.id,
     label: m.label,
@@ -355,6 +352,7 @@ function buildView() {
     color: colorForPercent(m.percent),
     resetText: formatReset(m.resetsAt, now),
     countdown: formatCountdown(m.resetsAt, now),
+    resetPassed: !!m.resetPassed,
   }));
   const orbs = { session: u?.session?.percent ?? 0, weekly: u?.weekly?.percent ?? 0, model: scoped?.percent ?? 0 };
   return {
@@ -509,7 +507,7 @@ function statusSnapshot() {
 function computePetState(now = Date.now()) {
   return choosePetState({
     claudeRunning,
-    usage: usage.snapshot.usage,
+    usage: usageAsOf(usage.snapshot.usage, usage.snapshot.fetchedAt, new Date(now)),
     warnAt: config.warnAtPercent,
     needsLogin: usage.snapshot.status === 'needs-login',
     userAwayMs: powerMonitor.getSystemIdleTime() * 1000,
@@ -1374,6 +1372,7 @@ async function startApp() {
     fakeUsagePath: args.fakeUsage,
     // snapshot runs reuse saved numbers so repeated test launches don't get rate limited by Anthropic
     offline: !!args.snapshot && !args.liveUsage,
+    log: logError,
   });
   usage.on('update', guarded('usage update', handleUsageUpdate));
 
@@ -1401,6 +1400,11 @@ async function startApp() {
   });
   screen.on('display-metrics-changed', reclamp);
   screen.on('display-removed', reclamp);
+
+  // Numbers from before a sleep can be hours old: check again once the computer is back.
+  const checkAfterSleep = guarded('checking usage after sleep', () => usage.resumed());
+  powerMonitor.on('resume', checkAfterSleep);
+  powerMonitor.on('unlock-screen', checkAfterSleep);
 
   nextFidgetAt = Date.now() + randomBetween(15_000, 30_000);
   scheduleNextRoam();

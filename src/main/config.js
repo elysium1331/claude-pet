@@ -20,7 +20,7 @@ const DEFAULTS = {
   hideHotkey: 'CommandOrControl+Alt+P', // null = no hotkey
   launchAtStartup: false,
   claudeProcessNames: ['claude.exe', 'claude'],
-  credentialsPath: null, // null = ~/.claude/.credentials.json
+  credentialsPath: null, // null = .credentials.json in CLAUDE_CONFIG_DIR, or in ~/.claude
   scopedLimit: null, // which per-model weekly limit drives the third orb; null = first one reported
   lightBackdrop: 'auto', // true | false | 'auto' (follow the Windows light/dark setting)
   petScale: 1, // 0.8 small, 1 normal, 1.25 large, 1.5 extra large

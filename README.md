@@ -55,11 +55,13 @@ If `npm start` says Electron failed to install, run `node node_modules/electron/
 
 ## How it gets your usage
 
-Claude Pet uses the login that Claude Code already saved on your computer (`~/.claude/.credentials.json`) to ask Anthropic for your plan usage, about every 2 minutes (every 10 while Claude is closed). Checking usage does not use up any of your usage.
+Claude Pet uses the login that Claude Code already saved on your computer (`.credentials.json` in `%USERPROFILE%\.claude`) to ask Anthropic for your plan usage, about every 2 minutes (every 10 while Claude is closed). Checking usage does not use up any of your usage.
 
 - Your token is only ever sent to Anthropic. It is never logged, copied or uploaded anywhere else.
-- When the saved login expires, Claude Pet renews it the same way Claude Code does and saves it back to the same file.
-- If it shows **Sign in needed**, open a terminal, run `claude` once, then `/exit`.
+- When the saved login expires, Claude Pet renews it the same way Claude Code does and saves it back to the same file. It takes Claude Code's renewal lock, so it waits while Claude Code is renewing. It never replaces a newer login that Claude Code saved, and it only saves a reply that is a complete login. If the file can't be saved right then (another program has it open, say), the pet keeps the renewed login in memory and saves it on a later check.
+- If the stats say **Run `claude` once in a terminal to sign in**, open a terminal, run `claude` (sign in if it asks), then `/exit`. The pet notices the new login within about 15 seconds. **Refresh usage now** in the right-click or tray menu checks right away.
+- If a limit's reset time passes while the pet can't check (you're offline, or signed out), that meter shows as reset until the next successful check.
+- If you use `CLAUDE_CONFIG_DIR` to move Claude Code's folder, Claude Pet reads the login and adds hooks there too. Set it as a Windows user environment variable (Settings → System → About → Advanced system settings → Environment Variables), not only in a shell profile: the pet starts from the Start Menu, so it can't see variables that only a terminal sets. The `credentialsPath` setting can point at a different credentials file.
 
 ## Connect to Claude Code (optional)
 
@@ -106,7 +108,7 @@ Right-click the pet or the tray icon and choose **Open settings file** (`%APPDAT
 | `palette` | `0` | Color theme (also in right-click → Appearance) |
 | `nightMode` | `"auto"` | Softer night glow: `true`, `false`, or `"auto"` (between `nightStartHour` and `nightEndHour`, default 22–7) |
 | `lightBackdrop` | `"auto"` | Stronger outline for light desktops: `true`, `false`, or `"auto"` (follows Windows theme) |
-| `credentialsPath` | `null` | Custom path to Claude Code's credentials file |
+| `credentialsPath` | `null` | Custom path to Claude Code's credentials file; `null` = `.credentials.json` in `CLAUDE_CONFIG_DIR`, or in `%USERPROFILE%\.claude` |
 | `pet` | `"celestial-fox"` | Which pet to show: the folder name of a built-in pet or one you added (letters, digits, `.`, `_` and `-` only) |
 
 ## Make your own pet
@@ -153,7 +155,7 @@ Useful flags for `npx electron .`:
 - `--claude-running=true|false`: override Claude app detection
 - `--pet-state=lounging`: force a pet state
 - `--start-at=x,y`: start the pet at a screen position (it is clamped on screen)
-- `--snapshot=out.png [--snapshot-stats]`: save a picture of the pet (and the stats panel), then quit. Snapshot runs use saved usage numbers; add `--live-usage` to fetch real ones.
+- `--snapshot=out.png [--snapshot-stats]`: save a picture of the pet (and the stats panel), then quit. Snapshot runs use saved usage numbers and never contact Anthropic, even when Claude opens or closes or you choose **Refresh usage now**; add `--live-usage` to fetch real ones.
 
 ## License
 

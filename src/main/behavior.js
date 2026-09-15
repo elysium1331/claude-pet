@@ -34,12 +34,13 @@ function lookFromCursor({ cursor, center, flipped = false, reach = 450 }) {
 
 const RESET_DROP_POINTS = 20; // a drop this large between checks means a limit reset, not rounding noise
 
+// Same meter before and after; scoped meters match by their unique id, and unknown percents are never compared.
 function meterPairs(prev, next) {
   const pairs = [[prev.session, next.session], [prev.weekly, next.weekly]];
   for (const meter of next.scoped || []) {
-    pairs.push([(prev.scoped || []).find((m) => m.label === meter.label), meter]);
+    pairs.push([(prev.scoped || []).find((m) => m.id === meter.id), meter]);
   }
-  return pairs.filter(([a, b]) => a && b);
+  return pairs.filter(([a, b]) => a && b && Number.isFinite(a.percent) && Number.isFinite(b.percent));
 }
 
 // Usage events worth a reaction between two successful usage checks: ['usageReset'], ['limitHit'] or [].

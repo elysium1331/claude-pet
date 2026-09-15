@@ -1,13 +1,18 @@
 // Polls the plan usage endpoint on a schedule, with backoff, renewal and a local cache.
 const EventEmitter = require('node:events');
 const fs = require('node:fs');
-const { readOAuth, isExpired, renewAccessToken, retryAfterMs } = require('./claude-auth');
-const { parseUsage } = require('./usage-parse');
+const { ClaudeLogin, isExpired, retryAfterMs } = require('./claude-auth');
+const { parseUsage, hasUsage, fillUnknownPercents } = require('./usage-parse');
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const MIN_BACKOFF_MS = 5 * 60_000;
 const MAX_BACKOFF_MS = 30 * 60_000;
 const MIN_INTERVAL_MS = 60_000;
+// While signed out, look at the saved login this often (a local file read, no request), so signing in shows up fast.
+const LOGIN_RECHECK_MS = 15_000;
+// After sleep, give the network a moment to come back before checking.
+const RESUME_DELAY_MS = 10_000;
+const SIGN_IN_MESSAGE = 'Run `claude` once in a terminal to sign in';
 
 // A zero, negative or non-numeric interval would poll back to back, so never check more than once a minute.
 function intervalMsFor(minutes) {
@@ -15,37 +20,60 @@ function intervalMsFor(minutes) {
   return Number.isFinite(ms) ? Math.max(MIN_INTERVAL_MS, ms) : MIN_INTERVAL_MS;
 }
 
+function loginFingerprint(oauth) {
+  return oauth ? [oauth.accessToken, oauth.refreshToken, oauth.expiresAt].join('\n') : '';
+}
+
 class UsageService extends EventEmitter {
-  constructor({ credentialsPath, userAgent, cachePath, intervalMinutes, fakeUsagePath, offline = false }) {
+  constructor({
+    credentialsPath, userAgent, cachePath, intervalMinutes, fakeUsagePath, offline = false,
+    fetch = globalThis.fetch, login = null, log = null,
+  }) {
     super();
     this.credentialsPath = credentialsPath;
     this.userAgent = userAgent;
     this.cachePath = cachePath;
     this.fakeUsagePath = fakeUsagePath;
     this.offline = offline; // use only cached numbers; never contact Anthropic (test runs)
+    this.fetchImpl = fetch;
+    this.login = login || new ClaudeLogin({ credentialsPath, userAgent, fetch });
+    this.log = log || ((context, err) => console.warn(`[usage] ${context}:`, err?.message || err));
     this.intervalMs = intervalMsFor(intervalMinutes);
     this.timer = null;
     this.backoffMs = 0;
     this.polling = false;
+    this.lastPollAt = 0; // when a check last started that could contact Anthropic
+    this.loginWait = null; // { until, fingerprint } while signed out
     this.snapshot = { usage: null, fetchedAt: null, status: 'loading', message: '' };
     this.loadCache();
+  }
+
+  // Offline test runs show saved numbers only: nothing may poll, renew or schedule.
+  savedNumbersOnly() {
+    return this.offline && !this.fakeUsagePath;
   }
 
   loadCache() {
     try {
       const cached = JSON.parse(fs.readFileSync(this.cachePath, 'utf8'));
-      this.snapshot = { usage: parseUsage(cached.raw), fetchedAt: new Date(cached.fetchedAt), status: 'stale', message: '' };
+      const usage = fillUnknownPercents(parseUsage(cached.raw), null);
+      const fetchedAt = new Date(cached.fetchedAt);
+      this.snapshot = { usage, fetchedAt: Number.isNaN(fetchedAt.getTime()) ? null : fetchedAt, status: 'stale', message: '' };
     } catch {
       // no cache yet
     }
   }
 
   start() {
-    if (this.offline && !this.fakeUsagePath) {
-      this.update({ message: this.snapshot.usage ? 'offline test run: saved numbers' : 'offline test run' });
+    if (this.savedNumbersOnly()) {
+      this.update({ message: this.offlineMessage() });
       return;
     }
     this.poll();
+  }
+
+  offlineMessage() {
+    return this.snapshot.usage ? 'offline test run: saved numbers' : 'offline test run';
   }
 
   stop() {
@@ -53,28 +81,49 @@ class UsageService extends EventEmitter {
     this.timer = null;
   }
 
+  // Keeps the time of the last check, so opening or closing Claude only changes when the next one is due.
   setIntervalMinutes(minutes) {
     const ms = intervalMsFor(minutes);
     if (ms === this.intervalMs) return;
-    const wasSlower = ms < this.intervalMs;
     this.intervalMs = ms;
-    if (wasSlower && !this.backoffMs) this.poll(); // speeding up (e.g. Claude just opened): refresh now
-    else this.schedule();
+    if (!this.polling) this.schedule();
   }
 
   refreshNow() {
+    if (this.savedNumbersOnly()) {
+      this.update({ message: this.offlineMessage() });
+      return;
+    }
     this.backoffMs = 0;
+    this.loginWait = null;
     this.poll();
   }
 
-  schedule() {
-    clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.poll(), this.backoffMs || this.intervalMs);
+  // The computer woke up or was unlocked: check as soon as a check is due, once the network had a moment.
+  resumed() {
+    if (!this.polling) this.schedule(RESUME_DELAY_MS);
   }
 
+  nextDelayMs(now = Date.now()) {
+    if (this.loginWait) return LOGIN_RECHECK_MS;
+    return Math.max(0, this.lastPollAt + (this.backoffMs || this.intervalMs) - now);
+  }
+
+  schedule(minDelayMs = 0) {
+    clearTimeout(this.timer);
+    this.timer = null;
+    if (this.savedNumbersOnly()) return;
+    this.timer = setTimeout(() => this.poll(), Math.max(minDelayMs, this.nextDelayMs()));
+  }
+
+  // A throwing listener must not turn accepted numbers into a failed check.
   update(patch) {
     this.snapshot = { ...this.snapshot, ...patch };
-    this.emit('update', this.snapshot);
+    try {
+      this.emit('update', this.snapshot);
+    } catch (err) {
+      this.log('usage update listener', err);
+    }
   }
 
   backOff(hintMs) {
@@ -82,12 +131,13 @@ class UsageService extends EventEmitter {
   }
 
   async poll() {
-    if (this.polling) return;
+    if (this.polling || this.savedNumbersOnly()) return;
     this.polling = true;
     try {
       await this.pollOnce();
     } catch (err) {
-      console.warn('[usage] poll failed:', err.message);
+      this.log('usage check failed', err);
+      this.backOff();
       this.update({ status: this.snapshot.usage ? 'stale' : 'error', message: 'Could not reach Claude' });
     } finally {
       this.polling = false;
@@ -97,44 +147,71 @@ class UsageService extends EventEmitter {
 
   async pollOnce() {
     if (this.fakeUsagePath) {
+      this.lastPollAt = Date.now();
       const raw = JSON.parse(fs.readFileSync(this.fakeUsagePath, 'utf8'));
-      return this.update({ usage: parseUsage(raw), fetchedAt: new Date(), status: 'ok', message: 'fake data' });
+      this.accept(raw, { message: 'fake data' });
+      return;
     }
 
-    let oauth = readOAuth(this.credentialsPath);
-    if (!oauth) return this.needsLogin();
+    let oauth = await this.login.current();
+    if (this.stillSignedOut(oauth)) return;
+    this.loginWait = null;
+    this.lastPollAt = Date.now();
+    if (!oauth) return this.needsLogin(null);
     if (isExpired(oauth)) {
-      const renewed = await renewAccessToken(this.credentialsPath, this.userAgent);
-      if (!renewed.ok) return this.renewFailed(renewed);
-      oauth = readOAuth(this.credentialsPath);
+      const renewed = await this.login.renew();
+      if (!renewed.ok) return this.renewFailed(renewed, oauth);
+      this.renewed(renewed);
+      oauth = await this.login.current();
+      if (!oauth) return this.needsLogin(null);
     }
 
     let res = await this.fetchUsage(oauth.accessToken);
     if (res.status === 401) {
-      const renewed = await renewAccessToken(this.credentialsPath, this.userAgent);
-      if (!renewed.ok) return this.renewFailed(renewed);
-      res = await this.fetchUsage(readOAuth(this.credentialsPath).accessToken);
+      const renewed = await this.login.renew();
+      if (!renewed.ok) return this.renewFailed(renewed, oauth);
+      this.renewed(renewed);
+      oauth = await this.login.current();
+      if (!oauth) return this.needsLogin(null);
+      res = await this.fetchUsage(oauth.accessToken);
     }
 
     if (res.status === 429) {
       this.backOff(retryAfterMs(res));
       return this.update({ status: 'stale', message: 'Usage check rate limited — retrying later' });
     }
-    if (res.status === 401) return this.needsLogin();
+    if (res.status === 401) return this.needsLogin(oauth);
     if (!res.ok) {
       this.backOff();
       return this.update({ status: this.snapshot.usage ? 'stale' : 'error', message: `Usage check failed (${res.status})` });
     }
 
     const raw = await res.json();
-    const fetchedAt = new Date();
+    if (!hasUsage(parseUsage(raw))) {
+      // Keep the last good numbers (and cache) rather than replacing them with an empty reply.
+      this.backOff();
+      return this.update({ status: this.snapshot.usage ? 'stale' : 'error', message: 'Usage check returned no usage numbers' });
+    }
     this.backoffMs = 0;
-    this.writeCache(raw, fetchedAt);
-    this.update({ usage: parseUsage(raw), fetchedAt, status: 'ok', message: '' });
+    this.accept(raw, { cache: true });
+  }
+
+  accept(raw, { message = '', cache = false } = {}) {
+    const fetchedAt = new Date();
+    const usage = fillUnknownPercents(parseUsage(raw), this.snapshot.usage);
+    if (cache) this.writeCache(raw, fetchedAt);
+    this.update({ usage, fetchedAt, status: 'ok', message });
+  }
+
+  // Signed out and the saved login hasn't changed: wait without sending anything, up to the usual long backoff.
+  stillSignedOut(oauth) {
+    const wait = this.loginWait;
+    return !!wait && Date.now() < wait.until && loginFingerprint(oauth) === wait.fingerprint;
   }
 
   fetchUsage(accessToken) {
-    return fetch(USAGE_URL, {
+    const fetchImpl = this.fetchImpl;
+    return fetchImpl(USAGE_URL, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'anthropic-beta': 'oauth-2025-04-20',
@@ -145,24 +222,35 @@ class UsageService extends EventEmitter {
     });
   }
 
-  renewFailed(result) {
-    if (result.reason === 'needs-login') return this.needsLogin();
+  renewed(result) {
+    if (result.saved === false) this.log('saving the renewed Claude login (will try again)', result.saveError);
+  }
+
+  renewFailed(result, oauth) {
+    if (result.reason === 'needs-login') return this.needsLogin(oauth);
+    if (result.reason === 'busy') {
+      this.backoffMs = result.retryAfterMs; // Claude Code is renewing right now; it takes seconds
+      return this.update({ status: 'stale', message: 'Waiting for Claude Code to renew its login' });
+    }
     this.backOff(result.retryAfterMs);
     this.update({ status: 'stale', message: 'Could not renew Claude login — retrying later' });
   }
 
-  needsLogin() {
-    this.backoffMs = MAX_BACKOFF_MS;
-    this.update({ status: 'needs-login', message: 'Run `claude` once in a terminal to sign in' });
+  needsLogin(oauth) {
+    this.backoffMs = 0;
+    this.loginWait = { until: Date.now() + MAX_BACKOFF_MS, fingerprint: loginFingerprint(oauth) };
+    this.update({ status: 'needs-login', message: SIGN_IN_MESSAGE });
   }
 
   writeCache(raw, fetchedAt) {
     try {
       fs.writeFileSync(this.cachePath, JSON.stringify({ fetchedAt, raw }));
     } catch (err) {
-      console.warn('[usage] could not write cache:', err.message);
+      this.log('could not write the usage cache', err);
     }
   }
 }
 
-module.exports = { UsageService, intervalMsFor, MIN_INTERVAL_MS };
+module.exports = {
+  UsageService, intervalMsFor, MIN_INTERVAL_MS, LOGIN_RECHECK_MS, MAX_BACKOFF_MS, RESUME_DELAY_MS,
+};

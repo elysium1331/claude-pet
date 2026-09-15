@@ -38,6 +38,7 @@ function ring(meter) {
 }
 
 function resetLine(m) {
+  if (m.resetPassed) return 'Reset since the last check';
   if (!m.resetText) return '';
   return m.countdown === 'now' ? 'Resetting now' : `Resets ${m.resetText} · in ${m.countdown}`;
 }
