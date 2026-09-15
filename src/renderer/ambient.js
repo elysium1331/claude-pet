@@ -28,7 +28,7 @@
       left: { value: 0, target: 0, releaseAt: 0 },
       right: { value: 0, target: 0, releaseAt: 0 },
     };
-    const tail = { value: 0, target: 0, rate: 1.5, releaseAt: 0, nextAt: 0 };
+    const tail = { value: 0, target: 0, rate: 1.5, releaseAt: 0, nextAt: 0, wagFrom: 0, wagUntil: 0 };
 
     function stepEars(now, dt) {
       if (!calm && now >= nextEarAt) {
@@ -49,10 +49,15 @@
 
     function stepTail(now, dt) {
       if (!calm && now >= tail.nextAt) {
-        if (random() < 0.15) {
+        const roll = random();
+        if (roll < 0.15) {
           tail.target = random() < 0.5 ? -1 : 1; // flick
           tail.rate = 10;
           tail.releaseAt = now + 250;
+        } else if (roll < 0.35) {
+          tail.wagFrom = now; // happy wag: a few quick swings
+          tail.wagUntil = now + 1400;
+          tail.releaseAt = 0;
         } else {
           tail.target = between(random, -0.6, 0.6); // lazy drift
           tail.rate = 1.5;
@@ -64,6 +69,17 @@
         tail.target = between(random, -0.3, 0.3);
         tail.rate = 3;
         tail.releaseAt = 0;
+      }
+      if (tail.wagUntil) {
+        if (now < tail.wagUntil && !calm) {
+          const seconds = (now - tail.wagFrom) / 1000;
+          tail.target = 0.5 * Math.sin(seconds * 2 * Math.PI * 2.2);
+          tail.rate = 14;
+        } else {
+          tail.wagUntil = 0;
+          tail.target = between(random, -0.3, 0.3);
+          tail.rate = 3;
+        }
       }
       if (calm) {
         tail.target = 0;

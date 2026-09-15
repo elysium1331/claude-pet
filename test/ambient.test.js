@@ -59,6 +59,23 @@ test('a tail lift raises the tail while travelling and eases back down after', (
   assert.ok(average(after.slice(-300)) < average(lifted.slice(-300)) - 0.3, 'drops back down');
 });
 
+test('the tail sometimes wags: several quick back-and-forth swings', () => {
+  const frames = run(createAmbient({ random: seeded(11) }), 0, 120_000);
+  // look for a 2-second window with at least 4 direction changes in the tail
+  let found = false;
+  for (let start = 0; start < frames.length && !found; start += 30) {
+    const windowFrames = frames.slice(start, start + 125); // ~2s at 16ms
+    let changes = 0;
+    for (let i = 2; i < windowFrames.length; i += 1) {
+      const d1 = windowFrames[i - 1].tailSway - windowFrames[i - 2].tailSway;
+      const d2 = windowFrames[i].tailSway - windowFrames[i - 1].tailSway;
+      if (Math.abs(d1) > 0.002 && Math.abs(d2) > 0.002 && Math.sign(d1) !== Math.sign(d2)) changes += 1;
+    }
+    if (changes >= 4) found = true;
+  }
+  assert.ok(found, 'a wag happens within two minutes');
+});
+
 test('calm mode (sleeping) eases everything back to rest', () => {
   const ambient = createAmbient({ random: seeded(9) });
   run(ambient, 0, 20_000);

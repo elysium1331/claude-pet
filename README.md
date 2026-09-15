@@ -137,7 +137,7 @@ Useful flags for `npx electron .`:
 - `--claude-running=true|false`: override Claude app detection
 - `--pet-state=lounging`: force a pet state
 - `--start-at=x,y`: start the pet at a screen position (it is clamped on screen)
-- `--snapshot=out.png [--snapshot-stats]`: save a picture of the pet (and the stats panel), then quit
+- `--snapshot=out.png [--snapshot-stats]`: save a picture of the pet (and the stats panel), then quit. Snapshot runs use saved usage numbers; add `--live-usage` to fetch real ones.
 
 ## License
 

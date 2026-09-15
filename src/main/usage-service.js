@@ -9,12 +9,13 @@ const MIN_BACKOFF_MS = 5 * 60_000;
 const MAX_BACKOFF_MS = 30 * 60_000;
 
 class UsageService extends EventEmitter {
-  constructor({ credentialsPath, userAgent, cachePath, intervalMinutes, fakeUsagePath }) {
+  constructor({ credentialsPath, userAgent, cachePath, intervalMinutes, fakeUsagePath, offline = false }) {
     super();
     this.credentialsPath = credentialsPath;
     this.userAgent = userAgent;
     this.cachePath = cachePath;
     this.fakeUsagePath = fakeUsagePath;
+    this.offline = offline; // use only cached numbers; never contact Anthropic (test runs)
     this.intervalMs = intervalMinutes * 60_000;
     this.timer = null;
     this.backoffMs = 0;
@@ -33,6 +34,10 @@ class UsageService extends EventEmitter {
   }
 
   start() {
+    if (this.offline && !this.fakeUsagePath) {
+      this.update({ message: this.snapshot.usage ? 'offline test run: saved numbers' : 'offline test run' });
+      return;
+    }
     this.poll();
   }
 

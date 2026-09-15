@@ -120,6 +120,7 @@ function parseArgs(argv) {
     roamNow: argv.includes('--roam-now'), // start a free-roam trip right after launch
     roamAt: Number(get('roam-at')) || 0, // start a free-roam trip this many ms after launch
     scale: get('scale'), // override the pet size for screenshots
+    liveUsage: argv.includes('--live-usage'), // let a snapshot run fetch real usage (otherwise it uses saved numbers)
     startAt: startAt?.length === 2 && startAt.every(Number.isFinite) ? { x: startAt[0], y: startAt[1] } : null,
   };
 }
@@ -1207,6 +1208,8 @@ app.whenReady().then(async () => {
     cachePath: path.join(userDataDir(), 'usage-cache.json'),
     intervalMinutes: claudeRunning ? config.pollMinutes : config.idlePollMinutes,
     fakeUsagePath: args.fakeUsage,
+    // snapshot runs reuse saved numbers so repeated test launches don't get rate limited by Anthropic
+    offline: !!args.snapshot && !args.liveUsage,
   });
   usage.on('update', handleUsageUpdate);
 
