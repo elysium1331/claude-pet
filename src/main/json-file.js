@@ -20,10 +20,12 @@ function readJsonFile(file) {
 }
 
 // Write to a temp file and rename it over the target, so a crash mid-write leaves the old file intact.
-function writeJsonAtomic(file, value, { pretty = false } = {}) {
+// `mode` sets file permissions where the OS uses them (not on Windows, where the folder's access rules apply).
+function writeJsonAtomic(file, value, { pretty = false, mode } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.claude-pet.tmp`;
-  fs.writeFileSync(tmp, pretty ? `${JSON.stringify(value, null, 2)}\n` : JSON.stringify(value));
+  const text = pretty ? `${JSON.stringify(value, null, 2)}\n` : JSON.stringify(value);
+  fs.writeFileSync(tmp, text, mode === undefined ? undefined : { mode });
   try {
     fs.renameSync(tmp, file);
   } catch (err) {

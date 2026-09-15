@@ -3,7 +3,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const {
   app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, globalShortcut, ipcMain, protocol, net, screen, shell,
-  powerMonitor, dialog,
+  powerMonitor, dialog, clipboard,
 } = require('electron');
 const {
   DEFAULTS, loadConfig, saveConfigChanges, configPath, loginItemAtLaunch,
@@ -30,6 +30,7 @@ const {
 const { ClaudeActivity } = require('./claude-activity');
 const { startHookServer } = require('./hook-server');
 const hooksInstaller = require('./hooks-installer');
+const { loadHookToken } = require('./hooks-token');
 const { classifyClicks, StrokeDetector, edgeBump } = require('./gestures');
 const petLife = require('./pet-life');
 const {
@@ -69,7 +70,8 @@ if (args.snapshot) {
   // Same settings folder whether run from source or installed ("Claude Pet"), so nothing is lost when switching.
   app.setPath('userData', path.join(app.getPath('appData'), 'claude-pet'));
 }
-if (!args.snapshot && !app.requestSingleInstanceLock()) {
+// The uninstaller's --remove-hooks run doesn't take the lock, so it works whether or not the pet is running.
+if (!args.snapshot && !args.removeHooks && !app.requestSingleInstanceLock()) {
   app.quit();
 }
 
@@ -83,6 +85,9 @@ let pet = null;
 let usage = null;
 let activity = null;
 let claudeRunning = true;
+let hookToken = null;
+let hookServer = null;
+let hookListener = { state: 'off', error: null }; // 'off' | 'starting' | 'listening' | 'failed'
 
 let petPos = null; // top-left of the pet window
 let grounded = false;
@@ -145,6 +150,7 @@ function parseArgs(argv) {
     roamAt: Number(get('roam-at')) || 0, // start a free-roam trip this many ms after launch
     scale: get('scale'), // override the pet size for screenshots
     liveUsage: argv.includes('--live-usage'), // let a snapshot run fetch real usage (otherwise it uses saved numbers)
+    removeHooks: argv.includes('--remove-hooks'), // run by the uninstaller: remove Claude Code hooks and the startup entry
     startAt: startAt?.length === 2 && startAt.every(Number.isFinite) ? { x: startAt[0], y: startAt[1] } : null,
   };
 }
@@ -183,10 +189,11 @@ function guarded(context, fn) {
 }
 
 // Not awaited, so the pet keeps running while it is open.
-function showNotice(message, detail = '') {
+// Never dialog.showErrorBox: it blocks the main process, and with it the Claude Code hook listener.
+function showNotice(message, detail = '', type = 'warning') {
   console.warn(`[notice] ${message} ${detail}`);
   if (args.snapshot) return;
-  dialog.showMessageBox({ type: 'warning', title: 'Claude Pet', message, detail, buttons: ['OK'] }).catch(() => {});
+  dialog.showMessageBox({ type, title: 'Claude Pet', message, detail, buttons: ['OK'] }).catch(() => {});
 }
 
 // ---------- pets ----------
@@ -421,7 +428,7 @@ function handleUsageUpdate() {
 
 function handleHookEvent(event, payload) {
   const reactions = activity.handle(event, payload);
-  if (args.debugHooks) console.log('[hooks]', event, payload.session_id || '', '->', reactions.join(',') || '-', '| now', activity.summary() || 'quiet');
+  if (args.debugHooks) console.log('[hooks]', event, payload?.session_id || '', '->', reactions.join(',') || '-', '| now', activity.summary() || 'quiet');
   // Claude activity shows working poses but doesn't count as touching the pet; it only delays lounging briefly.
   lastClaudeEventAt = Date.now();
   lastClaudeEvent = event;
@@ -430,16 +437,86 @@ function handleHookEvent(event, payload) {
   tick();
 }
 
+function hookOptions() {
+  return { port: config.hooksPort, token: hookToken };
+}
+
+// { state: 'missing' | 'current' | 'outdated' | 'unreadable', error }. Snapshot runs never look at Claude Code's settings.
 function hooksStatus() {
+  if (args.snapshot) return { state: 'missing', error: null };
+  return hooksInstaller.readHooksState(hookOptions());
+}
+
+// Hooks are only ever pointed at a port this process is really listening on.
+function listeningForHooks() {
+  return !!hookServer?.listening;
+}
+
+function portProblem(installed) {
+  const port = config.hooksPort;
+  const reason = hookListener.error === 'EADDRINUSE' ? 'another program is using it' : `it can't be used (${hookListener.error})`;
+  return {
+    message: `Claude Pet can't receive Claude Code events on port ${port}: ${reason}.`,
+    detail: installed
+      ? `Claude Code is still set up to send its events to port ${port}, where that program gets them instead of the pet. `
+        + 'Choose Disconnect from Claude Code… to stop that, or set hooksPort in the settings file to a free port '
+        + '(1024–65535) and restart Claude Pet, which moves its hooks to the new port.'
+      : 'Set hooksPort in the settings file to a free port (1024–65535), restart Claude Pet, then connect again.',
+  };
+}
+
+function startHookListener() {
+  hookListener = { state: 'starting', error: null };
   try {
-    return hooksInstaller.hooksInstalled() ? 'installed' : 'missing';
-  } catch {
-    return 'unreadable';
+    hookServer = startHookServer({
+      port: config.hooksPort,
+      token: hookToken,
+      onEvent: guarded('Claude Code hook', handleHookEvent),
+      onStatus: statusSnapshot,
+      onError: (err) => logError('hook listener', err),
+    });
+  } catch (err) {
+    listenerSettled({ ok: false, error: err });
+    return;
   }
+  hookServer.ready.then(guarded('hook listener', listenerSettled));
+}
+
+// Once the port is ours (or not): brings hooks from older versions (HTTP hooks, another port or token) up to date,
+// and speaks up if Claude Code is sending events to a port someone else holds.
+function listenerSettled({ ok, error }) {
+  hookListener = ok ? { state: 'listening', error: null } : { state: 'failed', error: error?.code || error?.message || String(error) };
+  if (!ok) logError(`listening for Claude Code on port ${config.hooksPort}`, error);
+  if (quitting) return;
+  const { state } = hooksStatus();
+  if (state === 'outdated') {
+    try {
+      const result = hooksInstaller.upgradeHooks(hookOptions());
+      if (result.backupPath) console.log('[hooks] updated; settings backup saved to', result.backupPath);
+    } catch (err) {
+      logError('updating Claude Code hooks', err);
+      showNotice("Claude Pet couldn't update its Claude Code hooks.", `${err.message}\n\nChoose Disconnect from Claude Code… and connect again to retry.`);
+    }
+  }
+  if (!ok && (state === 'current' || state === 'outdated')) {
+    const problem = portProblem(true);
+    showNotice(problem.message, problem.detail);
+  }
+  refreshTrayMenu();
 }
 
 async function toggleHooks() {
-  const installed = hooksStatus() === 'installed';
+  const { state, error } = hooksStatus();
+  if (state === 'unreadable') {
+    showNotice("Claude Pet can't read Claude Code's settings, so it can't connect or disconnect.", error, 'error');
+    return;
+  }
+  const installed = state !== 'missing';
+  if (!installed && !listeningForHooks()) {
+    const problem = portProblem(false);
+    showNotice(problem.message, problem.detail);
+    return;
+  }
   const { response } = await dialog.showMessageBox({
     type: 'question',
     buttons: [installed ? 'Remove hooks' : 'Install hooks', 'Cancel'],
@@ -450,16 +527,42 @@ async function toggleHooks() {
     detail: installed
       ? 'Claude Code will stop telling the pet when it is working, needs permission or finishes. Your other hooks are left alone.'
       : `Adds hooks to ${hooksInstaller.settingsPath()} so Claude Code tells the pet when it is working, needs permission, finishes or hits an error. `
-        + 'Events are sent only to this computer (127.0.0.1). A backup of the file is saved first, and your other settings and hooks are left alone.',
+        + `Each event is sent with curl to the pet on this computer (127.0.0.1:${config.hooksPort}), and Claude Code doesn't wait for it or read the reply. `
+        + 'A backup of the file is saved first, and your other settings and hooks are left alone.',
   });
   if (response !== 0) return;
   try {
-    const result = installed ? hooksInstaller.uninstallHooks() : hooksInstaller.installHooks(config.hooksPort);
+    if (!installed && !listeningForHooks()) throw new Error(portProblem(false).message);
+    const result = installed ? hooksInstaller.uninstallHooks() : hooksInstaller.installHooks(hookOptions());
     if (result.backupPath) console.log('[hooks] settings backup saved to', result.backupPath);
   } catch (err) {
-    dialog.showErrorBox('Claude Pet', `Could not update Claude Code settings: ${err.message}`);
+    logError('updating Claude Code settings', err);
+    showNotice('Could not update Claude Code settings.', err.message, 'error');
   }
   refreshTrayMenu();
+}
+
+function copyTroubleshootingInfo() {
+  clipboard.writeText(JSON.stringify(statusSnapshot(), null, 2));
+}
+
+// Run by the uninstaller (--remove-hooks): takes the pet's hooks out of Claude Code's settings and removes the
+// startup entry, with no windows. The settings folder is left for the user to keep or delete.
+function removeHooksAndExit() {
+  let failed = false;
+  try {
+    hooksInstaller.uninstallHooks();
+  } catch (err) {
+    failed = true;
+    logError('removing Claude Code hooks', err);
+  }
+  try {
+    app.setLoginItemSettings(loginItemSettings(false));
+  } catch (err) {
+    failed = true;
+    logError('removing the startup entry', err);
+  }
+  app.exit(failed ? 1 : 0);
 }
 
 function greetIfFirstToday() {
@@ -476,10 +579,16 @@ function markInteraction(reason = 'you interacted with the pet') {
   if (petState === 'lounging') tick();
 }
 
-// What the pet thinks is going on, for troubleshooting: GET http://127.0.0.1:<hooksPort>/claude-pet/status
+// What the pet thinks is going on, for troubleshooting: right-click → Copy troubleshooting info, or
+// GET http://127.0.0.1:<hooksPort>/claude-pet/status with the X-Claude-Pet-Token header from hooks-token.json.
 function statusSnapshot() {
   const now = Date.now();
   return {
+    version: app.getVersion(),
+    hooksPort: config.hooksPort,
+    hookListener: hookListener.state,
+    hookListenerError: hookListener.error,
+    claudeCodeHooks: hooksStatus().state,
     petState,
     shownPose: displayState(),
     claudeActivity: activity?.summary() ?? null,
@@ -1094,7 +1203,7 @@ function lifeSummary() {
 }
 
 function buildMenu() {
-  const hooks = hooksStatus();
+  const hooks = hooksStatus().state;
   const awake = petWin?.isVisible() && displayState() !== 'sleeping';
   return Menu.buildFromTemplate([
     { label: 'Show usage stats', click: showStatsFromMenu },
@@ -1148,12 +1257,16 @@ function buildMenu() {
     { label: 'Open Claude usage page', click: () => shell.openExternal(USAGE_PAGE) },
     { type: 'separator' },
     { label: 'Launch at startup', type: 'checkbox', checked: !!config.launchAtStartup, click: (item) => setLaunchAtStartup(item.checked) },
+    ...(hookListener.state === 'failed'
+      ? [{ label: `Claude Code events can't reach the pet (port ${config.hooksPort} is unavailable)`, enabled: false }]
+      : []),
     {
-      label: hooks === 'installed' ? 'Disconnect from Claude Code…' : 'Connect to Claude Code…',
-      enabled: hooks !== 'unreadable',
+      // Unreadable settings keep the item enabled: clicking it explains what is wrong.
+      label: hooks === 'current' || hooks === 'outdated' ? 'Disconnect from Claude Code…' : 'Connect to Claude Code…',
       click: toggleHooks,
     },
     { label: 'Open settings file', click: () => shell.openPath(configPath(userDataDir())) },
+    { label: 'Copy troubleshooting info', click: copyTroubleshootingInfo },
     { type: 'separator' },
     { label: 'Quit Claude Pet', click: quitWithGoodbye },
   ]);
@@ -1170,9 +1283,9 @@ function createTray() {
   refreshTrayMenu();
 }
 
-function loginItemSettings() {
+function loginItemSettings(openAtLogin = !!config.launchAtStartup) {
   const devArgs = app.isPackaged ? {} : { path: process.execPath, args: [ROOT] };
-  return { openAtLogin: !!config.launchAtStartup, ...devArgs };
+  return { openAtLogin, ...devArgs };
 }
 
 // Applied at every launch, so setting launchAtStartup to false in config.json also removes the startup entry.
@@ -1377,13 +1490,10 @@ async function startApp() {
   usage.on('update', guarded('usage update', handleUsageUpdate));
 
   activity = new ClaudeActivity({ celebrateAfterMs: config.celebrateAfterSeconds * 1000 });
-  if (!args.snapshot || args.debugHooks) {
-    try {
-      startHookServer({ port: config.hooksPort, onEvent: guarded('Claude Code hook', handleHookEvent), onStatus: statusSnapshot });
-    } catch (err) {
-      logError('starting the hook listener', err);
-    }
-  }
+  const loadedToken = loadHookToken(userDataDir());
+  hookToken = loadedToken.token;
+  if (loadedToken.error) logError('saving the Claude Code hooks token', loadedToken.error);
+  if (!args.snapshot || args.debugHooks) startHookListener();
 
   createPetWindow();
   updateFacing();
@@ -1429,7 +1539,14 @@ function failStartup(err) {
   app.exit(1);
 }
 
-startGuarded(app.whenReady(), startApp, failStartup);
+if (args.removeHooks) {
+  startGuarded(app.whenReady(), removeHooksAndExit, (err) => {
+    logError('removing Claude Code hooks', err);
+    app.exit(1);
+  });
+} else {
+  startGuarded(app.whenReady(), startApp, failStartup);
+}
 
 app.on('before-quit', stopTimers);
 app.on('second-instance', () => windowAlive(petWin) && showPet());

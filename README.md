@@ -25,7 +25,7 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 - Playing and finished Claude Code tasks raise its happiness and experience; ignored for hours, it gets a little droopy.
 - It grows as it levels up (level 1 at 30 XP, 2 at 120, 3 at 300): longer tail wisps, then an extra antenna pearl and brighter stars, then a soft halo and crown.
 - Right-click → **Appearance** to pick a color theme (celestial blue, rose gold, mint aqua, violet silver) and the night glow: softer light between 10 PM and 7 AM by default, or always / never. The usage orbs keep their colors in every theme.
-- Tray icon: show/hide, refresh now, open Claude's usage page, launch at startup, settings.
+- Tray icon: show/hide, refresh now, open Claude's usage page, launch at startup, settings, and copy troubleshooting info.
 - `Ctrl+Alt+P` hides or shows it (for windowed games, screen shares, and so on). While hidden it stays silent.
 
 ## Requirements
@@ -41,6 +41,8 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 3. Windows may warn that the app is from an unknown publisher, because it isn't code-signed yet. Choose **More info → Run anyway**.
 
 After that, start it any time from the Start Menu or desktop shortcut. To have it start with Windows, right-click the pet (or the tray icon) and turn on **Launch at startup**. Uninstall it from Windows **Settings → Apps**.
+
+Uninstalling also removes the pet's Claude Code hooks and its startup entry. It leaves two things for you to keep or delete: the pet's settings, happiness and level in `%APPDATA%\claude-pet`, and the last backup of Claude Code's settings, `settings.json.claude-pet-backup`, next to Claude Code's `settings.json`.
 
 ## Run from source
 
@@ -68,11 +70,19 @@ Claude Pet uses the login that Claude Code already saved on your computer (`.cre
 Right-click the pet or the tray icon and choose **Connect to Claude Code…**. The pet then reacts to what Claude Code is doing:
 
 - **Thinking / working:** thinking pose while Claude reads your prompt, busy pose while it runs tools
-- **Needs you:** rings a bell and waits when Claude asks for permission, and nods when you approve
+- **Needs you:** rings a bell and waits when Claude asks for permission, and nods when you approve. If you press Esc or deny the permission instead, it stops waiting about a minute later, when Claude Code reports that it's idle.
 - **Done:** celebrates when a longer task finishes
 - **Oops:** flinches when a tool fails
 
-This adds HTTP hooks to Claude Code's user settings (`~/.claude/settings.json`) that send each event to `http://127.0.0.1:47821` on your own computer. Nothing leaves your machine. A backup of the file is saved next to it first, and your other settings and hooks are left alone. If the pet isn't running, Claude Code simply carries on. Choose **Disconnect from Claude Code…** to remove the hooks again.
+This adds hooks to Claude Code's user settings: `settings.json` in `%USERPROFILE%\.claude`, or in `CLAUDE_CONFIG_DIR` if you set it. Each hook uses `curl`, which comes with Windows 10 and 11, to send the event to the pet at `127.0.0.1:47821` on your own computer. Nothing leaves your machine.
+
+- The hooks run in the background. Claude Code doesn't wait for them and ignores any reply, so no program listening on that port can approve a tool or change what Claude does. If the pet isn't running, Claude Code simply carries on.
+- Every event carries a random token that only your Windows account can read, kept in `%APPDATA%\claude-pet\hooks-token.json`. The pet ignores events without it, so other programs and other accounts on the same PC can't fake them.
+- Before changing the file, the pet saves a copy of it as `settings.json.claude-pet-backup` next to it. There is only ever one backup, replaced each time. Your other settings and hooks are left alone, and a symlinked settings file stays a link.
+- If another program is already using the port, the pet tells you and won't connect. Set `hooksPort` to a free port and restart the pet.
+- Hooks added by an older version of Claude Pet, or pointing at an old port, are updated automatically when the pet starts. Claude Code sessions that were already open may need a restart to pick up the change.
+- Choose **Disconnect from Claude Code…** to remove the hooks again. Uninstalling Claude Pet removes them too.
+- If the pet doesn't react, right-click → **Copy troubleshooting info** copies what the pet thinks is going on to the clipboard: whether it's listening, whether the hooks are installed, and what each Claude Code session is doing.
 
 While the pet is hidden it stays silent.
 
@@ -96,7 +106,7 @@ Right-click the pet or the tray icon and choose **Open settings file** (`%APPDAT
 | `roam` | `"taskbar"` | Free roam: `"off"`, `"taskbar"` or `"screen"` |
 | `roamMinMinutes` / `roamMaxMinutes` | `10` / `25` | How long it waits between trips (minutes, at least 1) |
 | `strollPose` | `"float"` | Taskbar strolls: `"float"` at normal size, or `"walk"` with the compact walking gait |
-| `hooksPort` | `47821` | Local port Claude Code hooks send events to, 1024–65535 (reconnect after changing) |
+| `hooksPort` | `47821` | Local port Claude Code hooks send events to, 1024–65535. The pet moves its hooks to the new port when it restarts. |
 | `celebrateAfterSeconds` | `20` | Only celebrate Claude Code tasks that took at least this long |
 | `hideHotkey` | `CommandOrControl+Alt+P` | Show/hide shortcut; `null` for none |
 | `launchAtStartup` | `false` | Also toggleable from the tray menu |
@@ -155,6 +165,7 @@ Useful flags for `npx electron .`:
 - `--claude-running=true|false`: override Claude app detection
 - `--pet-state=lounging`: force a pet state
 - `--start-at=x,y`: start the pet at a screen position (it is clamped on screen)
+- `--remove-hooks`: remove the pet's Claude Code hooks and its startup entry, then exit without showing anything (the uninstaller runs this)
 - `--snapshot=out.png [--snapshot-stats]`: save a picture of the pet (and the stats panel), then quit. Snapshot runs use saved usage numbers and never contact Anthropic, even when Claude opens or closes or you choose **Refresh usage now**; add `--live-usage` to fetch real ones.
 
 ## License
