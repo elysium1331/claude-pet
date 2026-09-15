@@ -3,8 +3,11 @@
 const RESTING_STATES = new Set(['sleeping', 'lounging']);
 
 // Some poses (like lying down) occupy a different part of the pet box than the floating pose.
-function insetsForState(pet, state) {
-  return pet.stateInsets?.[state] || pet.bodyInsets;
+function insetsForState(pet, state, facing = 1) {
+  const insets = pet.stateInsets?.[state] || pet.bodyInsets;
+  // pets that really turn (instead of being mirrored) can give separate bounds per direction
+  if (insets && typeof insets.right === 'object') return facing < 0 ? insets.left : insets.right;
+  return insets;
 }
 
 // Reaction to play when the pet gets up from a resting pose, or null.

@@ -105,6 +105,7 @@ function applyPet() {
   setColor(vm, colors.model, lastView.orbColors.model);
   setBoolean(vm, binding.lightBackdropProperty, lastView.lightBackdrop);
   setBoolean(vm, binding.hoveredProperty, hovered);
+  setNumber(vm, binding.facingProperty, lastView.facing < 0 ? -1 : 1);
   setNumber(vm, binding.happinessProperty, lastView.happiness ?? 50);
   setNumber(vm, binding.growthProperty, lastView.growth ?? 0);
   setNumber(vm, binding.paletteProperty, lastView.palette ?? 0);

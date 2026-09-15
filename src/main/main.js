@@ -236,6 +236,7 @@ function buildView() {
       model: colorForPercent(orbs.model),
     },
     flipped: isFlipped(),
+    facing,
     happiness: Math.round(life.happiness),
     growth: Math.min(pet.maxGrowth ?? 0, args.growth !== undefined ? Number(args.growth) : displayedGrowth),
     palette: Math.min(Math.max(0, (pet.palettes?.length || 1) - 1), Math.max(0, Number(args.palette ?? config.palette) || 0)),
@@ -477,7 +478,7 @@ function chaseStep() {
     return;
   }
   const nextFacing = dx >= 0 ? 1 : -1;
-  if (Math.abs(dx) > 20 && nextFacing !== facing) {
+  if (Math.abs(dx) > 60 && nextFacing !== facing) { // a turn takes ~350ms, so don't flip on tiny overshoots
     facing = nextFacing;
     pushView();
   }
@@ -616,12 +617,18 @@ function workAreaAt(point) {
   return screen.getDisplayNearestPoint(point).workArea;
 }
 
+// Pets with a facing control turn themselves; older pets are mirrored instead.
+function turnsByItself() {
+  return !!pet.binding?.facingProperty;
+}
+
 function isFlipped() {
-  return facing !== (pet.artFacing || 1);
+  return !turnsByItself() && facing !== (pet.artFacing || 1);
 }
 
 function currentInsets() {
-  return mirrorInsets(insetsForState(pet, drag ? 'held' : resolveState(pet, displayState())), isFlipped());
+  const insets = insetsForState(pet, drag ? 'held' : resolveState(pet, displayState()), facing);
+  return turnsByItself() ? insets : mirrorInsets(insets, isFlipped());
 }
 
 function placementOptions(workArea) {

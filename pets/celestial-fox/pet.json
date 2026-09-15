@@ -27,7 +27,8 @@
     "happinessProperty": "happiness",
     "growthProperty": "growth",
     "paletteProperty": "palette",
-    "nightModeProperty": "nightMode"
+    "nightModeProperty": "nightMode",
+    "facingProperty": "facing"
   },
   "maxGrowth": 3,
   "palettes": ["Celestial blue", "Rose gold", "Mint aqua", "Violet silver"],
@@ -45,7 +46,9 @@
     "confused": 10,
     "disconnected": 11,
     "chasing": 12,
-    "sitting": 13
+    "sitting": 13,
+    "walking": 14,
+    "floatingTravel": 15
   },
   "reactions": {
     "wake": "perkUp",
@@ -67,7 +70,8 @@
     "bonk": "bonk",
     "dizzy": "dizzy",
     "tricks": ["trickSpin", "trickFlip"],
-    "roamPause": ["lookAround", "scratchEar"],
+    "roamPause": ["sniff", "lookAround", "lookBack"],
+    "roamHome": "happyHop",
     "levelUp": "levelUp"
   },
   "timings": {
@@ -82,14 +86,35 @@
     { "trigger": "orbPlay", "ms": 3500 },
     { "trigger": "tailChase", "ms": 3000 },
     { "trigger": "scratchEar", "ms": 2000, "states": ["idle", "lounging", "sitting"] },
-    { "trigger": "sneeze", "ms": 1500, "states": ["idle", "sitting"] }
+    { "trigger": "sneeze", "ms": 1500, "states": ["idle", "sitting"] },
+    { "trigger": "sniff", "ms": 2000, "states": ["sitting"] }
   ],
-  "bodyInsets": { "top": 0.045, "right": 0.121, "bottom": 0.065, "left": 0.121 },
+  "bodyInsets": {
+    "right": { "top": 0.045, "right": 0.121, "bottom": 0.065, "left": 0.121 },
+    "left": { "top": 0.033, "right": 0.121, "bottom": 0.08, "left": 0.121 }
+  },
   "stateInsets": {
-    "lounging": { "top": 0.653, "right": 0.195, "bottom": 0.017, "left": 0.018 },
-    "sitting": { "top": 0.552, "right": 0.184, "bottom": 0.012, "left": 0.018 },
-    "held": { "top": 0.028, "right": 0.121, "bottom": 0.038, "left": 0.121 },
-    "chasing": { "top": 0.05, "right": 0.121, "bottom": 0.025, "left": 0.121 }
+    "lounging": {
+      "right": { "top": 0.627, "right": 0.195, "bottom": 0.017, "left": 0.021 },
+      "left": { "top": 0.627, "right": 0.314, "bottom": 0.017, "left": 0.021 }
+    },
+    "sitting": {
+      "right": { "top": 0.547, "right": 0.086, "bottom": 0.012, "left": 0.086 },
+      "left": { "top": 0.533, "right": 0.086, "bottom": 0.012, "left": 0.086 }
+    },
+    "walking": {
+      "right": { "top": 0.51, "right": 0.086, "bottom": 0.012, "left": 0.086 },
+      "left": { "top": 0.5, "right": 0.086, "bottom": 0.012, "left": 0.086 }
+    },
+    "floatingTravel": {
+      "right": { "top": 0.055, "right": 0.121, "bottom": 0.022, "left": 0.121 },
+      "left": { "top": 0.038, "right": 0.121, "bottom": 0.01, "left": 0.121 }
+    },
+    "chasing": {
+      "right": { "top": 0.05, "right": 0.121, "bottom": 0.025, "left": 0.121 },
+      "left": { "top": 0.043, "right": 0.121, "bottom": 0.033, "left": 0.121 }
+    },
+    "held": { "top": 0.028, "right": 0.121, "bottom": 0.038, "left": 0.121 }
   },
   "size": { "width": 560, "height": 600 }
 }

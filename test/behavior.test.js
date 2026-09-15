@@ -52,6 +52,17 @@ test('insetsForState uses a pose-specific body box when the pet has one', () => 
   assert.deepEqual(insetsForState({ bodyInsets: pet.bodyInsets }, 'lounging'), pet.bodyInsets);
 });
 
+test('insetsForState picks the bounds for the direction the pet faces, when the pet provides both', () => {
+  const right = { top: 0.1, right: 0.2, bottom: 0.1, left: 0.05 };
+  const left = { top: 0.1, right: 0.3, bottom: 0.1, left: 0.05 };
+  const turner = { bodyInsets: { right, left }, stateInsets: { lounging: { right: left, left: right } } };
+  assert.deepEqual(insetsForState(turner, 'idle', 1), right);
+  assert.deepEqual(insetsForState(turner, 'idle', -1), left);
+  assert.deepEqual(insetsForState(turner, 'lounging', -1), right);
+  // pets with one set of bounds ignore facing
+  assert.deepEqual(insetsForState(pet, 'idle', -1), pet.bodyInsets);
+});
+
 test('wakeReaction plays the wake-up only when leaving a resting pose', () => {
   assert.equal(wakeReaction(pet, 'lounging', 'idle'), 'perkUp');
   assert.equal(wakeReaction(pet, 'sleeping', 'lowUsage'), 'perkUp');
