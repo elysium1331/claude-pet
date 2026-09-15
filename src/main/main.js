@@ -48,6 +48,7 @@ const PET_SIZE = { width: 150, height: 160 }; // updated in place when the size 
 const SIZE_OPTIONS = [['Small', 0.8], ['Normal', 1], ['Large', 1.25], ['Extra large', 1.5]];
 const PANEL_PAD = 14; // transparent room around the stats card for its shadow (matches panel.css)
 const SNAP_PX = 28;
+const AUTO_HIDE_START_X = 240; // clear of the far-left taskbar button, short of the icons of a centered taskbar
 const USAGE_PAGE = 'https://claude.ai/settings/usage';
 const CLAUDE_CHECK_MS = 15_000;
 const TICK_MS = 1000;
@@ -1006,10 +1007,13 @@ function flushPetPosition() {
 function initialPetPosition() {
   const start = args.startAt || config.petPosition;
   if (start && Number.isFinite(start.x) && Number.isFinite(start.y)) return clampPet(start, placementOptions(petCenter(start)));
-  // First run: on the ground at the left of the main display.
-  const { workArea } = screen.getPrimaryDisplay();
+  // First run: on the ground at the left of the main display. The main display always has a taskbar, so one that
+  // takes no room hides itself, and would slide out over that corner's button (Widgets, or Start): start past it.
+  const primary = screen.getPrimaryDisplay();
+  const { workArea } = primary;
   const inside = { x: workArea.x + workArea.width / 2, y: workArea.y + workArea.height / 2 };
-  return groundBelow(workArea.x + 24, { petSize: PET_SIZE, insets: currentInsets(), ...layoutAt(inside) });
+  const left = workArea.x + (taskbarEdge(primary) ? 24 : AUTO_HIDE_START_X);
+  return groundBelow(left, { petSize: PET_SIZE, insets: currentInsets(), ...layoutAt(inside) });
 }
 
 // Turn toward the middle of the screen after the pet settles somewhere new.

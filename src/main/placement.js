@@ -57,18 +57,51 @@ function taskbarEdge({ bounds, workArea }) {
   return edge;
 }
 
-// The other display whose work area carries on past one edge of this work area, all along the stretch the body
-// covers (from..to, across that edge), if there is one.
-function acrossEdge(side, workArea, neighbours, from, to) {
-  return neighbours.find(({ workArea: other }) => {
-    const [edge, facing, start, end] = {
-      left: [workArea.x, rightOf(other), other.y, bottomOf(other)],
-      right: [rightOf(workArea), other.x, other.y, bottomOf(other)],
-      top: [workArea.y, bottomOf(other), other.x, rightOf(other)],
-      bottom: [bottomOf(workArea), other.y, other.x, rightOf(other)],
-    }[side];
-    return Math.abs(edge - facing) <= SEAM_PX && start <= from + SEAM_PX && end >= to - SEAM_PX;
-  });
+// Where a pet box can go on one display: its body inside the work area, and SCREEN_EDGE_GAP_PX clear of any edge
+// where the work area reaches the screen's edge (when bounds are known).
+function boxLimits({ workArea, bounds = null }, petSize, ins) {
+  const gap = (atScreenEdge) => (bounds && atScreenEdge ? SCREEN_EDGE_GAP_PX : 0);
+  return {
+    minX: workArea.x - ins.left + gap(bounds && workArea.x <= bounds.x),
+    maxX: rightOf(workArea) - petSize.width + ins.right - gap(bounds && rightOf(workArea) >= rightOf(bounds)),
+    minY: workArea.y - ins.top + gap(bounds && workArea.y <= bounds.y),
+    maxY: bottomOf(workArea) - petSize.height + ins.bottom - gap(bounds && bottomOf(workArea) >= bottomOf(bounds)),
+  };
+}
+
+const SEAMS = {
+  left: { edge: (area) => area.x, facing: rightOf, along: 'y' },
+  right: { edge: rightOf, facing: (area) => area.x, along: 'y' },
+  top: { edge: (area) => area.y, facing: bottomOf, along: 'x' },
+  bottom: { edge: bottomOf, facing: (area) => area.y, along: 'x' },
+};
+
+// The way through one edge of a display into another display whose work area carries on from it: that display, and
+// the range (of box y for a side edge, box x for the top or bottom) where the body fits on both, or null for a wall.
+//
+// It is worked out from both displays' limits alike, so a pet moving across meets the same seam whichever of the two
+// it is counted on, with no jump when that changes. Displays of different heights share only part of the edge (e.g.
+// the one with the taskbar has the higher ground); a pet that would have to be moved further than its own size to
+// fit there, such as at a monitor that starts far below it, finds a wall.
+function seamAcross(side, pos, { limits, workArea, neighbours, petSize, ins }) {
+  const { edge, facing, along } = SEAMS[side];
+  const [low, high] = along === 'y' ? ['minY', 'maxY'] : ['minX', 'maxX'];
+  const reach = along === 'y' ? petSize.height : petSize.width;
+  let best = null;
+  for (const other of neighbours) {
+    if (Math.abs(edge(workArea) - facing(other.workArea)) > SEAM_PX) continue;
+    const theirs = boxLimits(other, petSize, ins);
+    const min = Math.max(limits[low], theirs[low]);
+    const max = Math.min(limits[high], theirs[high]);
+    if (min > max) continue;
+    const fit = clamp(pos[along], min, max);
+    const nudge = Math.max(
+      Math.abs(fit - clamp(pos[along], limits[low], limits[high])),
+      Math.abs(fit - clamp(pos[along], theirs[low], theirs[high])),
+    );
+    if (nudge <= reach && !(best && best.nudge <= nudge)) best = { display: other, min, max, nudge };
+  }
+  return best;
 }
 
 // Keeps the body inside the work area (which excludes the taskbar) and snaps it onto the bottom edge, its ground,
@@ -76,30 +109,31 @@ function acrossEdge(side, workArea, neighbours, from, to) {
 //
 // bounds: the display's bounds. Where the work area reaches a screen edge (no taskbar showing there), the body keeps
 // SCREEN_EDGE_GAP_PX away from it, so the bottom of the screen is the ground when the taskbar is hidden or elsewhere.
-// neighbours: the other displays ({ workArea }). An edge another display's work area carries on from is neither a
-// wall nor ground, so the pet can straddle two monitors and move across without stopping at the seam.
+// neighbours: the other displays ({ workArea, bounds }). An edge another display carries on from is neither a wall
+// nor ground (see seamAcross), so the pet can straddle two monitors and move across without stopping at the seam.
 function clampPet(pos, {
   petSize, insets, workArea, bounds = null, neighbours = [], snapPx = 0,
 }) {
   const ins = insetPx(insets, petSize);
-  const gap = (atScreenEdge) => (bounds && atScreenEdge ? SCREEN_EDGE_GAP_PX : 0);
-  const minX = workArea.x - ins.left + gap(bounds && workArea.x <= bounds.x);
-  const maxX = rightOf(workArea) - petSize.width + ins.right - gap(bounds && rightOf(workArea) >= rightOf(bounds));
-  const minY = workArea.y - ins.top + gap(bounds && workArea.y <= bounds.y);
-  const maxY = bottomOf(workArea) - petSize.height + ins.bottom - gap(bounds && bottomOf(workArea) >= bottomOf(bounds));
+  const limits = boxLimits({ workArea, bounds }, petSize, ins);
+  const seam = (side) => seamAcross(side, pos, { limits, workArea, neighbours, petSize, ins });
 
-  // One axis at a time: whether the body fits across a side seam depends on its height on screen, and the reverse.
-  const heldY = clamp(pos.y, minY, maxY);
-  const spanY = [heldY + ins.top, heldY + petSize.height - ins.bottom];
-  const openLeft = !!acrossEdge('left', workArea, neighbours, ...spanY);
-  const openRight = !!acrossEdge('right', workArea, neighbours, ...spanY);
-  const x = clamp(pos.x, openLeft ? -Infinity : minX, openRight ? Infinity : maxX);
-  const spanX = [x + ins.left, x + petSize.width - ins.right];
-  const openTop = !!acrossEdge('top', workArea, neighbours, ...spanX);
-  const openBottom = !!acrossEdge('bottom', workArea, neighbours, ...spanX);
-  let y = clamp(pos.y, openTop ? -Infinity : minY, openBottom ? Infinity : maxY);
+  // A body crossing a side seam is on both displays, so it keeps to the heights both have room for (and stands on the
+  // higher ground); one crossing the top or bottom keeps to the widths both have.
+  const left = pos.x < limits.minX ? seam('left') : null;
+  const right = pos.x > limits.maxX ? seam('right') : null;
+  const side = left || right;
+  let x = clamp(pos.x, left ? -Infinity : limits.minX, right ? Infinity : limits.maxX);
+  const minY = side ? side.min : limits.minY;
+  const maxY = side ? side.max : limits.maxY;
 
-  const grounded = !openBottom && maxY - y <= snapPx;
+  const top = side ? null : seam('top');
+  const bottom = side ? null : seam('bottom');
+  const crossing = (pos.y < minY && top) || (pos.y > maxY && bottom);
+  if (crossing) x = clamp(x, crossing.min, crossing.max);
+  let y = clamp(pos.y, top ? -Infinity : minY, bottom ? Infinity : maxY);
+
+  const grounded = !bottom && maxY - y <= snapPx;
   if (grounded) y = maxY;
   return { x: Math.round(x), y: Math.round(y), grounded };
 }
@@ -121,9 +155,11 @@ function groundBelow(x, {
     const limits = displayLimits(current, displays);
     const placed = clampPet({ x: left, y: Number.MAX_SAFE_INTEGER }, { petSize, insets, ...limits });
     if (placed.grounded) return placed;
-    const below = acrossEdge('bottom', current.workArea, limits.neighbours, placed.x + ins.left, placed.x + petSize.width - ins.right);
+    const below = seamAcross('bottom', placed, {
+      limits: boxLimits(current, petSize, ins), workArea: current.workArea, neighbours: limits.neighbours, petSize, ins,
+    });
     if (!below) break;
-    current = below;
+    current = below.display;
     left = placed.x;
   }
   return clampPet({ x: left, y: Number.MAX_SAFE_INTEGER }, { petSize, insets, workArea: current.workArea, bounds: current.bounds });

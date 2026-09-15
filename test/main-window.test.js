@@ -664,6 +664,105 @@ test('chasing the cursor onto another monitor never jumps the pet across the sea
   assert.deepEqual(app.errors, []);
 });
 
+// A monitor to the left without a taskbar (Windows shows it on the main display only): its ground is lower.
+const BARE_LEFT_DISPLAY = { id: 4, bounds: LEFT_DISPLAY.bounds, workArea: LEFT_DISPLAY.bounds };
+
+test('dragging the pet along the ground onto a monitor without a taskbar, and back, never jumps or bonks', async (t) => {
+  const app = await startMain(t, { displays: [MAIN_DISPLAY, BARE_LEFT_DISPLAY] });
+  app.tick(1100);
+  const grab = app.bodyCenter();
+  app.fake.cursor = grab;
+  app.send('pet:press');
+  app.send('pet:drag-start');
+  const heldGround = Math.round(WORK_AREA.height - 160 + FOX.stateInsets.held.bottom * 160);
+  const dragThrough = (points) => {
+    const climbs = [];
+    for (const point of points) {
+      const before = app.petWin.getBounds();
+      app.fake.cursor = point;
+      app.send('pet:drag-move');
+      app.tick(20);
+      const after = app.petWin.getBounds();
+      assert.ok(Math.abs(after.x - before.x) <= 10, `x ${before.x} -> ${after.x} for a 10px drag at ${JSON.stringify(point)}`);
+      if (Math.hypot(after.x - before.x, after.y - before.y) > 11) climbs.push(after);
+    }
+    return climbs;
+  };
+  // Left along the taskbar, the cursor 4px below where it holds the pet: onto the bare monitor, following it down.
+  const low = grab.y + (heldGround - app.petWin.getBounds().y) + 4;
+  dragThrough([{ x: grab.x, y: low }]);
+  assert.deepEqual(dragThrough(Array.from({ length: 40 }, (_, i) => ({ x: grab.x - 10 * i, y: low }))), []);
+  assert.equal(app.petWin.getBounds().y, heldGround + 4);
+  // Down onto the bare monitor's ground, then back right: one step up onto the taskbar at the seam.
+  app.fake.cursor = { x: grab.x - 390, y: 1075 };
+  app.send('pet:drag-move');
+  const climbs = dragThrough(Array.from({ length: 40 }, (_, i) => ({ x: grab.x - 390 + 10 * i, y: 1075 })));
+  assert.equal(climbs.length, 1);
+  assert.equal(climbs[0].y, heldGround);
+  assert.equal(count(app.reactions(), 'bonk'), 0);
+  app.send('pet:drag-end');
+  assert.deepEqual(app.errors, []);
+});
+
+test('chasing the cursor down onto a monitor without a taskbar never jumps the pet across the seam', async (t) => {
+  const bareRight = { id: 5, bounds: { x: 1920, y: 0, width: 1920, height: 1080 }, workArea: { x: 1920, y: 0, width: 1920, height: 1080 } };
+  const app = await startMain(t, { displays: [MAIN_DISPLAY, bareRight], argv: ['--start-at=1843,876'] });
+  app.tick(1100);
+  const ground = groundTop('chasing', 160, bareRight.bounds) - 4;
+  app.fake.cursor = { x: 2400, y: 1060 };
+  app.clickMenu('Chase my cursor');
+  let before = app.petWin.getBounds();
+  for (let i = 0; i < 100 && app.status().shownPose === 'chasing'; i += 1) {
+    app.tick(30);
+    const after = app.petWin.getBounds();
+    const moved = Math.hypot(after.x - before.x, after.y - before.y);
+    // Near the ground it snaps onto it, as on any one screen.
+    assert.ok(moved <= 16 || (after.y === ground && Math.abs(after.x - before.x) <= 14), `one chase step from ${JSON.stringify(before)} to ${JSON.stringify(after)}`);
+    before = after;
+  }
+  assert.ok(before.x > 1920, 'it got onto the other monitor');
+  assert.deepEqual(app.errors, []);
+});
+
+test('a wander planned while strolls walk is kept on screen with the floating pose\'s bounds', async (t) => {
+  const wide = { id: 1, bounds: { x: 0, y: 0, width: 5120, height: 1440 }, workArea: { x: 0, y: 0, width: 5120, height: 1392 } };
+  const app = await startMain(t, {
+    displays: [wide], argv: ['--start-at=4880,1200'], config: { roam: 'screen', strollPose: 'walk', taskbarPose: 'sit', petScale: 1.5 },
+  });
+  app.tick(1100);
+  app.fake.cursor = { x: 2560, y: 20 };
+  // Every draw 0.1: a wander (not a stroll) far to the left, bowed so the way back arcs up past the top of the screen.
+  const random = t.mock.method(Math, 'random', () => 0.1);
+  app.clickMenu('Go for a stroll now');
+  random.mock.restore();
+  assert.equal(app.status().roaming, true);
+  const floatingTop = FOX.stateInsets.floatingTravel.right.top;
+  let highest = Infinity;
+  for (let waited = 0; app.status().roaming && waited < 120_000; waited += 250) {
+    app.tick(250);
+    const { y, height } = app.petWin.getBounds();
+    highest = Math.min(highest, y + floatingTop * height);
+  }
+  assert.equal(app.status().roaming, false);
+  assert.ok(highest >= 0 && highest < 20, `the floating body's top reached ${highest}, just inside the top of the screen`);
+  assert.deepEqual(app.errors, []);
+});
+
+test('on first run with an auto-hidden taskbar, the pet starts clear of the button at the far left of it', async (t) => {
+  const bounds = { x: 0, y: 0, width: 1920, height: 1080 };
+  const hidden = await startMain(t, { displays: [{ id: 1, bounds, workArea: bounds }] });
+  hidden.tick(1100);
+  assert.ok(hidden.petWin.getBounds().x >= 200, `x ${hidden.petWin.getBounds().x}`);
+  assert.deepEqual(hidden.errors, []);
+});
+
+test('on first run with the taskbar showing, the pet starts at the left end of it', async (t) => {
+  const app = await startMain(t);
+  app.tick(1100);
+  assert.equal(app.petWin.getBounds().x, 24);
+  assert.deepEqual(app.errors, []);
+});
+
 test('with the taskbar hidden, the pet rests just above the bottom of the screen, clear of the strip that reveals it', async (t) => {
   const bounds = { x: 0, y: 0, width: 1920, height: 1080 };
   const app = await startMain(t, { displays: [{ id: 1, bounds, workArea: bounds }] });

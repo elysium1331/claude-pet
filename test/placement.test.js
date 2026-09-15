@@ -4,6 +4,7 @@ const {
   clampPet, displayLimits, groundBelow, nearestDisplay, taskbarEdge, combinedInsets, bodyRect, panelPlacement, chooseFacing,
   mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
 } = require('../src/main/placement');
+const { edgeBump } = require('../src/main/gestures');
 
 test('scaledPetSize scales the pet box and keeps the scale sensible', () => {
   assert.deepEqual(scaledPetSize(1), { width: 150, height: 160 });
@@ -115,6 +116,68 @@ test('a seam is only crossed where the other monitor has room for the whole body
   // A monitor whose own taskbar sits between them: the taskbar is a wall.
   const docked = screenOf({ x: 1982, y: 0, width: 1858, height: 1080 }, { x: 1920, y: 0, width: 1920, height: 1080 });
   assert.equal(clampPet({ x: 1860, y: 400 }, onScreen(mainScreen, [mainScreen, docked])).x, 1785 - 4);
+});
+
+// The main monitor has a taskbar and its neighbours don't, or are taller: their grounds are lower than its ground.
+const bareLeftScreen = screenOf({ x: -1920, y: 0, width: 1920, height: 1080 }, { x: -1920, y: 0, width: 1920, height: 1080 });
+const tallRightScreen = screenOf({ x: 1920, y: 0, width: 2560, height: 1392 }, { x: 1920, y: 0, width: 2560, height: 1440 });
+// What drag and chase do: clamp on the display nearest the box's center.
+const placeNearest = (pos, displays) => clampPet(pos, onScreen(nearestDisplay({ x: pos.x + 75, y: pos.y + 80 }, displays), displays));
+
+test('a seam between monitors with different grounds is met the same way from the displays on both sides', () => {
+  const displays = [mainScreen, bareLeftScreen, tallRightScreen];
+  const sameFromBoth = (a, b, xs, ys, among = displays) => {
+    for (const x of xs) {
+      for (const y of ys) {
+        assert.deepEqual(clampPet({ x, y }, onScreen(a, among)), clampPet({ x, y }, onScreen(b, among)), `at ${x},${y}`);
+      }
+    }
+  };
+  const range = (from, to, step) => Array.from({ length: Math.floor((to - from) / step) + 1 }, (_, i) => from + i * step);
+  // bodies across x = 0 and x = 1920, from high up to well below the taskbar's ground (a pet held by its head)
+  sameFromBoth(mainScreen, bareLeftScreen, range(-135, -15, 8), range(-40, 1100, 20));
+  sameFromBoth(mainScreen, tallRightScreen, range(1790, 1900, 8), range(-40, 904 + 160, 20));
+  // further below than its own height, the taller monitor is only beside it: that is a wall, from either side
+  assert.equal(clampPet({ x: 1860, y: 1080 }, onScreen(mainScreen, displays)).x, 1785 - 4);
+  assert.equal(clampPet({ x: 1860, y: 1080 }, onScreen(tallRightScreen, displays)).x, 1920 - 15 + 4);
+  // straddling, the body keeps above the taskbar it is partly over, and stands on it
+  assert.deepEqual(clampPet({ x: -60, y: 930 }, onScreen(bareLeftScreen, displays)), { x: -60, y: 904, grounded: true });
+  // an upper monitor that is offset sideways: a body crossing up into it is nudged inside both
+  const offsetUpper = screenOf({ x: 100, y: -1080, width: 1920, height: 1080 }, { x: 100, y: -1080, width: 1920, height: 1080 });
+  sameFromBoth(mainScreen, offsetUpper, range(-60, 1900, 40), range(-130, -15, 5), [mainScreen, offsetUpper]);
+  assert.deepEqual(clampPet({ x: 0, y: -60 }, onScreen(mainScreen, [mainScreen, offsetUpper])), { x: 100 - 15 + 4, y: -60, grounded: false });
+});
+
+test('dragging along the ground onto a monitor with a lower ground never jumps or bonks, either way', () => {
+  const dragFrom = (start, displays, desiredY, direction, steps) => {
+    let pet = placeNearest(start, displays);
+    const path = [pet];
+    for (let i = 1; i <= steps; i += 1) {
+      const desired = { x: start.x + 10 * i * direction, y: desiredY };
+      const placed = placeNearest(desired, displays);
+      assert.equal(edgeBump(desired, placed), null, `bonk at ${JSON.stringify(desired)}`);
+      assert.ok(Math.abs(placed.x - pet.x) <= 10, `x ${pet.x} -> ${placed.x}`);
+      path.push(placed);
+      pet = placed;
+    }
+    return path;
+  };
+  const moves = (path) => path.slice(1).map((p, i) => Math.hypot(p.x - path[i].x, p.y - path[i].y));
+  for (const below of [3, 8, 12]) { // the cursor a little below where it holds the pet on the taskbar
+    for (const [displays, start, direction] of [
+      [[mainScreen, tallRightScreen], { x: 1700, y: 904 }, 1],
+      [[mainScreen, bareLeftScreen], { x: 100, y: 904 }, -1],
+    ]) {
+      const path = dragFrom(start, displays, 904 + below, direction, 40);
+      assert.ok(Math.max(...moves(path)) <= Math.hypot(10, below) + 0.5, `${below}px below: ${moves(path)}`);
+      assert.equal(path.at(-1).y, 904 + below, 'on the other monitor it follows the cursor down');
+    }
+  }
+  // Back from the bare monitor's ground (44px lower): it steps up onto the taskbar at the seam, in one move.
+  const path = dragFrom({ x: -500, y: 948 }, [mainScreen, bareLeftScreen], 948, 1, 60);
+  const climbs = path.slice(1).filter((p, i) => p.y !== path[i].y);
+  assert.deepEqual(climbs.map((p) => p.y), [904]);
+  assert.ok(climbs[0].x > -150 && climbs[0].x < 0, `stepped up at the seam (x ${climbs[0].x})`);
 });
 
 test('groundBelow finds the ground straight down, carrying on into a monitor below', () => {

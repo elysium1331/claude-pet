@@ -9,7 +9,7 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 ## What it does
 
 - Sits on your taskbar (bottom-left by default). Drag it anywhere; it stays on screen and snaps back onto the taskbar when you drop it near it.
-- If your taskbar is at the top or side, hides itself, or isn't on that monitor, the bottom of the screen is its ground instead. It keeps a few pixels clear of the screen edges so a hidden taskbar can still slide out, though a taskbar that slides out can cover it; drag it aside if it's in the way.
+- If your taskbar is at the top or side, hides itself, or isn't on that monitor, the bottom of the screen is its ground instead. It keeps a few pixels clear of the screen edges so a hidden taskbar can still slide out, and with a hidden taskbar it starts a little way in from the left, clear of the Start or Widgets button. A taskbar that slides out can still cover it; drag it aside if it's in the way.
 - With more than one monitor it can sit across the seam and move from one to the next where they meet. A monitor's bottom edge is only ground where no monitor continues below it, so a pet that lies down on the upper of two stacked monitors drifts down to the taskbar below.
 - The three orbs orbiting the pet are your meters: one dot = session, two = weekly, three = your per-model weekly limit (e.g. Fable). Their rings fill and turn amber, then red, as you use more.
 - Click the pet to open the full stats: percentages, bars, reset times and countdowns. Click again, or anywhere else, to close. Only the pet itself takes clicks and touches: the see-through space around it passes them to whatever is underneath.
