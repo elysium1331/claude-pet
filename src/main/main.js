@@ -1434,6 +1434,7 @@ startGuarded(app.whenReady(), startApp, failStartup);
 app.on('before-quit', stopTimers);
 app.on('second-instance', () => windowAlive(petWin) && showPet());
 app.on('will-quit', () => {
+  usage?.saveLoginBeforeExit(); // first: renewed tokens that couldn't be saved yet would be lost for good
   globalShortcut.unregisterAll();
   flushPetPosition();
   clearTimeout(lifeSaveTimer);

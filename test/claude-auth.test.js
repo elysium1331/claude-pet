@@ -5,9 +5,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  ClaudeLogin, tokensFromResponse, saveDecision, acquireRefreshLock, defaultCredentialsPath, MIN_RENEW_INTERVAL_MS, LOCK_STALE_MS,
+  ClaudeLogin, readOAuth, tokensFromResponse, refreshTokenDead, saveDecision, acquireRefreshLock, defaultCredentialsPath,
+  MIN_RENEW_INTERVAL_MS, LOCK_STALE_MS, SAVE_RETRY_MS,
 } = require('../src/main/claude-auth');
 const { claudeConfigDir } = require('../src/main/claude-dir');
+const { UsageService } = require('../src/main/usage-service');
 const hooksInstaller = require('../src/main/hooks-installer');
 
 const NOW = Date.UTC(2026, 8, 15, 12);
@@ -32,11 +34,11 @@ function setup(oauth = {}) {
   return { dir, file, content, readFile, writeOauth, cleanup };
 }
 
-function reply(status, body = {}) {
+function reply(status, body = {}, headers = {}) {
   return {
     status,
     ok: status >= 200 && status < 300,
-    headers: new Headers(),
+    headers: new Headers(headers),
     json: async () => (typeof body === 'function' ? body() : body),
   };
 }
@@ -52,9 +54,28 @@ function fakeFetch(...responses) {
   return { fetch, calls };
 }
 
-function loginFor(s, { fetch, clock = { now: NOW }, fs: fsImpl } = {}) {
+// Renaming over the credentials file fails (another program has it open) while `state.fails` is set.
+function flakyRename(state, code = 'EPERM') {
+  return {
+    ...fs,
+    renameSync: (from, to) => {
+      if (!state.fails) return fs.renameSync(from, to);
+      throw Object.assign(new Error(`${code}: operation not permitted, rename`), { code });
+    },
+  };
+}
+
+async function waitFor(check, ms = 5000) {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) throw new Error('timed out waiting');
+    await new Promise((resolve) => { setTimeout(resolve, 5); });
+  }
+}
+
+function loginFor(s, { fetch, clock = { now: NOW }, fs: fsImpl, saveRetryMs } = {}) {
   return new ClaudeLogin({
-    credentialsPath: s.file, userAgent: 'claude-pet-test', fetch, fs: fsImpl, now: () => clock.now, retryDelayMs: 0,
+    credentialsPath: s.file, userAgent: 'claude-pet-test', fetch, fs: fsImpl, now: () => clock.now, retryDelayMs: 0, saveRetryMs,
   });
 }
 
@@ -84,8 +105,28 @@ test('tokensFromResponse accepts only a complete login', () => {
     { access_token: 'A' }, { access_token: 'A', expires_at: NOW + 60_000 }, { access_token: 'A', expires_in: '3600' },
     { access_token: 'A', expires_in: 0 }, { access_token: 'A', expires_in: -5 }, { access_token: 'A', expires_in: Infinity },
     { access_token: 'A', expires_in: 1e12 },
+    { access_token: 'A\nB', expires_in: 60 }, { access_token: 'A B', expires_in: 60 }, { access_token: 'Aé', expires_in: 60 },
+    { access_token: 'A', refresh_token: 'R\r\n', expires_in: 60 }, { access_token: 'A', refresh_token: 'R\u0000', expires_in: 60 },
   ];
   for (const body of bad) assert.equal(tokensFromResponse(body, NOW), null, JSON.stringify(body));
+});
+
+test('a saved login whose tokens are not plain visible text counts as signed out', () => {
+  const cases = [
+    [{}, true],
+    [{ refreshToken: '' }, true], // blanked by Claude Code
+    [{ refreshToken: null }, true],
+    [{ accessToken: 'sk-ant-oat01-SECRET\nx' }, false],
+    [{ accessToken: 'A 1' }, false],
+    [{ accessToken: '' }, false],
+    [{ refreshToken: 'R\u0000' }, false],
+    [{ refreshToken: 42 }, false],
+  ];
+  for (const [oauth, signedIn] of cases) {
+    const s = setup(oauth);
+    assert.equal(readOAuth(s.file) !== null, signedIn, JSON.stringify(oauth));
+    s.cleanup();
+  }
 });
 
 test('saveDecision never replaces a newer login and never brings back a signed-out one', () => {
@@ -120,6 +161,7 @@ test('renew saves only the new tokens, keeps every other key and leaves no temp 
   assert.equal(fs.existsSync(`${s.dir}.lock`), false);
   if (process.platform !== 'win32') assert.equal(fs.statSync(s.file).mode & 0o777, 0o600);
   assert.equal((await login.current()).accessToken, 'A2');
+  assert.equal(login.saveTimer, null);
   s.cleanup();
 });
 
@@ -142,25 +184,16 @@ test('renew leaves the file untouched when the reply is not a complete login', a
 
 test('renewed tokens that cannot be saved are kept in memory, used, and saved on a later check', async () => {
   const s = setup();
-  let renameFails = true;
-  const flakyFs = {
-    ...fs,
-    renameSync: (from, to) => {
-      if (!renameFails) return fs.renameSync(from, to);
-      const err = new Error('EPERM: operation not permitted, rename');
-      err.code = 'EPERM';
-      throw err;
-    },
-  };
+  const rename = { fails: true };
   const clock = { now: NOW };
   const { fetch, calls } = fakeFetch(
     reply(200, RENEWED),
     () => {
-      renameFails = false;
+      rename.fails = false;
       return reply(200, { access_token: 'A3', refresh_token: 'R3', expires_in: 3600 });
     },
   );
-  const login = loginFor(s, { fetch, clock, fs: flakyFs });
+  const login = loginFor(s, { fetch, clock, fs: flakyRename(rename) });
   const before = fs.readFileSync(s.file, 'utf8');
 
   const first = await login.renew();
@@ -179,27 +212,77 @@ test('renewed tokens that cannot be saved are kept in memory, used, and saved on
   assert.equal(s.readFile().claudeAiOauth.refreshToken, 'R3');
   assert.equal(s.readFile().mcpOAuth.server.token, 'keep me');
   assert.equal(calls.length, 2);
+  assert.equal(login.saveTimer, null);
   s.cleanup();
 });
 
 test('an unsaved renewal is saved as soon as the file can be written again', async () => {
   const s = setup();
-  let renameFails = true;
-  const flakyFs = {
-    ...fs,
-    renameSync: (from, to) => {
-      if (!renameFails) return fs.renameSync(from, to);
-      throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
-    },
-  };
+  const rename = { fails: true };
   const { fetch, calls } = fakeFetch(reply(200, RENEWED));
-  const login = loginFor(s, { fetch, fs: flakyFs });
+  const login = loginFor(s, { fetch, fs: flakyRename(rename, 'EBUSY') });
   assert.equal((await login.renew()).saved, false);
-  renameFails = false;
+  rename.fails = false;
   assert.equal((await login.current()).accessToken, 'A2');
   assert.equal(s.readFile().claudeAiOauth.refreshToken, 'R2');
   assert.equal(login.unsaved, null);
+  assert.equal(login.saveTimer, null);
   assert.equal(calls.length, 1);
+  s.cleanup();
+});
+
+test('a renewal that could not be saved is retried within seconds, not at the next usage check', async () => {
+  assert.ok(SAVE_RETRY_MS <= 15_000);
+  const s = setup({ expiresAt: 1 });
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-pet-usage-'));
+  const rename = { fails: true };
+  const login = loginFor(s, { fetch: fakeFetch(reply(200, RENEWED)).fetch, fs: flakyRename(rename), saveRetryMs: 250 });
+  const usageAuth = [];
+  const usage = new UsageService({
+    cachePath: path.join(cacheDir, 'usage-cache.json'),
+    intervalMinutes: 2,
+    userAgent: 'claude-pet-test',
+    login,
+    log: () => {},
+    fetch: async (url, { headers }) => {
+      usageAuth.push(headers.Authorization);
+      return reply(429, {}, { 'retry-after': '1800' });
+    },
+  });
+  usage.schedule = () => {};
+
+  await usage.poll();
+  assert.deepEqual(usageAuth, ['Bearer A2']); // the unsaved tokens are used
+  assert.equal(usage.backoffMs, 30 * 60_000);
+  assert.equal(s.readFile().claudeAiOauth.refreshToken, 'R1');
+  assert.ok(login.saveTimer);
+  assert.equal(login.saveRetryDelayMs, 250); // on its own timer, not after the usage backoff
+
+  rename.fails = false;
+  await waitFor(() => login.unsaved === null);
+  assert.equal(s.readFile().claudeAiOauth.refreshToken, 'R2');
+  assert.equal(login.saveTimer, null);
+  assert.deepEqual(fs.readdirSync(s.dir), ['.credentials.json']);
+  assert.equal(usageAuth.length, 1); // no usage check was needed
+  s.cleanup();
+  fs.rmSync(cacheDir, { recursive: true, force: true });
+});
+
+test('quitting makes one last save of renewed tokens, finished before it returns, and stops retrying', async () => {
+  const s = setup();
+  const rename = { fails: true };
+  const login = loginFor(s, { fetch: fakeFetch(reply(200, RENEWED)).fetch, fs: flakyRename(rename), saveRetryMs: 30 });
+  assert.equal((await login.renew()).saved, false);
+  await waitFor(() => login.saveRetryDelayMs >= 60); // still failing: tried again, a little later each time
+  assert.equal(login.saveBeforeExit(), false);
+  assert.equal(login.saveTimer, null);
+
+  rename.fails = false;
+  assert.equal(login.saveBeforeExit(), true); // a plain true, not a promise the exiting process would drop
+  assert.equal(s.readFile().claudeAiOauth.refreshToken, 'R2');
+  assert.deepEqual(fs.readdirSync(s.dir), ['.credentials.json']);
+  assert.equal(fs.existsSync(`${s.dir}.lock`), false);
+  assert.equal(loginFor(s).saveBeforeExit(), true); // nothing unsaved: nothing to do
   s.cleanup();
 });
 
@@ -260,6 +343,34 @@ test('a turned-down refresh token counts as renewed if Claude Code saved a newer
   s.writeOauth({ ...s.content.claudeAiOauth, refreshToken: 'R5' });
   assert.equal((await dead.renew()).ok, true);
   assert.equal(calls[1].body.refresh_token, 'R5');
+  s.cleanup();
+});
+
+test('only invalid_grant marks a refresh token dead; other turned-down replies leave it usable', async () => {
+  assert.equal(refreshTokenDead({ error: 'invalid_grant', error_description: 'Refresh token not found or invalid' }), true);
+  assert.equal(refreshTokenDead({ error: { type: 'invalid_grant' } }), true);
+  const notDead = [
+    null, 'invalid_grant', [], {}, { error: 'invalid_scope' }, { error: 'invalid_client' }, { error: 'unauthorized_client' },
+    { error: 'access_denied', error_description: 'account_on_hold' }, { error: 'invalid_grant', error_description: 'account_on_hold' },
+  ];
+  for (const body of notDead) assert.equal(refreshTokenDead(body), false, JSON.stringify(body));
+
+  const s = setup();
+  const clock = { now: NOW };
+  const { fetch, calls } = fakeFetch(
+    reply(400, { error: 'invalid_scope' }),
+    reply(400, { error: 'access_denied', error_description: 'account_on_hold' }),
+    reply(401, () => { throw new SyntaxError('Unexpected end of JSON input'); }),
+    reply(200, RENEWED),
+  );
+  const login = loginFor(s, { clock, fetch });
+  for (let i = 0; i < 3; i += 1) {
+    assert.deepEqual(await login.renew(), { ok: false, reason: 'error' });
+    clock.now += MIN_RENEW_INTERVAL_MS;
+  }
+  assert.equal((await login.renew()).ok, true);
+  assert.deepEqual(calls.map((c) => c.body.refresh_token), ['R1', 'R1', 'R1', 'R1']);
+  assert.equal(s.readFile().claudeAiOauth.refreshToken, 'R2');
   s.cleanup();
 });
 

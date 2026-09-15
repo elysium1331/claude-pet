@@ -9,6 +9,9 @@ const sample = require('./fixtures/usage-response.json');
 
 const GOOD = { accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3_600_000 };
 const EXPIRED = { ...GOOD, expiresAt: 1 };
+// The fixture's reset times have passed; these keep its numbers describing the current windows.
+const THIS_WINDOW = new Date(Date.now() + 3_600_000).toISOString();
+const NEXT_WINDOW = new Date(Date.now() + 6 * 3_600_000).toISOString();
 
 function tempCache() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'claude-pet-usage-')), 'usage-cache.json');
@@ -34,8 +37,11 @@ function usageReply(body, status = 200) {
   return { status, ok: status >= 200 && status < 300, headers: new Headers(), json: async () => body };
 }
 
-function withPercent(kind, percent) {
-  return { ...sample, limits: sample.limits.map((l) => (l.kind === kind ? { ...l, percent } : l)) };
+function withPercent(kind, percent, resetsAt = THIS_WINDOW) {
+  return {
+    ...sample,
+    limits: sample.limits.map((l) => (l.kind === kind ? { ...l, percent, resets_at: resetsAt } : { ...l, resets_at: THIS_WINDOW })),
+  };
 }
 
 // Timers are stubbed so tests never wait or leave anything running.
@@ -74,6 +80,26 @@ test('a throwing update listener does not turn accepted numbers into a failed ch
   assert.deepEqual(logged, ['usage update listener']);
 });
 
+test('a failed check logs only the kind of error, never its message, which can quote the token', async () => {
+  const logged = [];
+  const log = (...args) => logged.push(args);
+  // What Node's fetch really throws for a token with a line break in it.
+  const headerError = async (url, { headers }) => {
+    throw new TypeError(`Headers.append: "${headers.Authorization}" is an invalid header value.`);
+  };
+  const s = service({ login: fakeLogin({ ...GOOD, accessToken: 'sk-ant-oat01-SECRET\nx' }), fetch: headerError, log });
+  await s.poll();
+  assert.equal(s.snapshot.message, 'Could not reach Claude');
+
+  const refused = async () => {
+    throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED 1.2.3.4:443'), { code: 'ECONNREFUSED' }) });
+  };
+  await service({ login: fakeLogin(GOOD), fetch: refused, log }).poll();
+
+  assert.deepEqual(logged, [['usage check failed', 'TypeError'], ['usage check failed', 'TypeError ECONNREFUSED']]);
+  assert.doesNotMatch(JSON.stringify(logged), /SECRET/);
+});
+
 test('a reply without usage numbers keeps the last good numbers and cache, and backs off', async () => {
   const cachePath = tempCache();
   const replies = [usageReply(sample), usageReply({}), usageReply({ error: { type: 'overloaded' } })];
@@ -91,8 +117,13 @@ test('a reply without usage numbers keeps the last good numbers and cache, and b
   assert.ok(s.backoffMs >= 5 * 60_000);
 });
 
-test('a meter sent without a percent keeps its last value instead of reading 0%', async () => {
-  const replies = [usageReply(withPercent('session', null)), usageReply(sample), usageReply(withPercent('session', null))];
+test('a meter sent without a percent keeps its last value for the same window instead of reading 0%', async () => {
+  const replies = [
+    usageReply(withPercent('session', null)),
+    usageReply(withPercent('session', 7)),
+    usageReply(withPercent('session', null)),
+    usageReply(withPercent('session', null, NEXT_WINDOW)),
+  ];
   const s = service({ login: fakeLogin(GOOD), fetch: async () => replies.shift() });
   await s.poll();
   assert.equal(s.snapshot.usage.session, null); // never seen with a number: left out
@@ -101,6 +132,9 @@ test('a meter sent without a percent keeps its last value instead of reading 0%'
   await s.poll();
   assert.equal(s.snapshot.status, 'ok');
   assert.equal(s.snapshot.usage.session.percent, 7);
+  await s.poll();
+  assert.equal(s.snapshot.usage.session, null); // a new window: the old number no longer applies
+  assert.equal(s.snapshot.usage.weekly.percent, 36);
 });
 
 test('a login that disappears during renewal shows the sign-in prompt, not a network error', async () => {

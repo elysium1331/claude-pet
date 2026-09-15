@@ -75,18 +75,39 @@ test('parseUsage reads a missing or junk percent as unknown, not 0%', () => {
 });
 
 test('fillUnknownPercents carries the last value forward, or leaves out a meter never seen with a number', () => {
+  const beforeResets = new Date('2026-09-14T12:00:00Z');
   const prev = parseUsage(sample);
   const next = parseUsage({
     limits: sample.limits.map((l) => (l.kind === 'weekly_all' ? l : { ...l, percent: null })),
   });
-  const filled = fillUnknownPercents(next, prev);
+  const filled = fillUnknownPercents(next, prev, beforeResets);
   assert.equal(filled.session.percent, 7);
   assert.equal(filled.weekly.percent, 36);
   assert.equal(filled.scoped[0].percent, 67);
-  const fresh = fillUnknownPercents(next, null);
+  const fresh = fillUnknownPercents(next, null, beforeResets);
   assert.equal(fresh.session, null);
   assert.equal(fresh.weekly.percent, 36);
   assert.deepEqual(fresh.scoped, []);
+});
+
+test('fillUnknownPercents never carries a number into a new window', () => {
+  const now = new Date('2026-09-15T12:00:00Z');
+  const hour = 3_600_000;
+  const at = (ms) => new Date(now.getTime() + ms).toISOString();
+  const session = (percent, resetsAt) => parseUsage({ limits: [{ kind: 'session', percent, resets_at: resetsAt }] });
+  const fill = (next, prev) => fillUnknownPercents(next, prev, now).session;
+
+  // The limit was hit, its reset passed, and the next reply has no percent and a new reset time.
+  assert.equal(fill(session(null, at(5 * hour)), session(100, at(-hour))), null);
+  // The same reset time, but it has passed: that window is over.
+  assert.equal(fill(session(null, at(-hour)), session(100, at(-hour))), null);
+  // Only one of the two has a reset time.
+  assert.equal(fill(session(null, at(hour)), session(100, null)), null);
+  assert.equal(fill(session(null, null), session(100, at(hour))), null);
+
+  // The same window (a fraction of a second apart), or neither has a reset time: the last number still applies.
+  assert.equal(fill(session(null, at(hour + 440)), session(100, at(hour))).percent, 100);
+  assert.equal(fill(session(null, null), session(100, null)).percent, 100);
 });
 
 test('scoped limits always get distinct labels and ids, from string names only', () => {

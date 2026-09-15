@@ -24,6 +24,13 @@ function loginFingerprint(oauth) {
   return oauth ? [oauth.accessToken, oauth.refreshToken, oauth.expiresAt].join('\n') : '';
 }
 
+// What a failed check may log: the kind of error and its codes only. fetch's messages can quote the request headers,
+// token included, and the log file is what people attach to bug reports.
+function errorSummary(err) {
+  const parts = [err?.name, err?.code, err?.cause?.code].filter((p) => typeof p === 'string' && p !== '');
+  return parts.length ? parts.join(' ') : 'unknown error';
+}
+
 class UsageService extends EventEmitter {
   constructor({
     credentialsPath, userAgent, cachePath, intervalMinutes, fakeUsagePath, offline = false,
@@ -81,6 +88,11 @@ class UsageService extends EventEmitter {
     this.timer = null;
   }
 
+  // Quitting: renewed tokens that couldn't be saved yet get one last try, or they would be lost with the process.
+  saveLoginBeforeExit() {
+    return this.login.saveBeforeExit();
+  }
+
   // Keeps the time of the last check, so opening or closing Claude only changes when the next one is due.
   setIntervalMinutes(minutes) {
     const ms = intervalMsFor(minutes);
@@ -136,7 +148,7 @@ class UsageService extends EventEmitter {
     try {
       await this.pollOnce();
     } catch (err) {
-      this.log('usage check failed', err);
+      this.log('usage check failed', errorSummary(err));
       this.backOff();
       this.update({ status: this.snapshot.usage ? 'stale' : 'error', message: 'Could not reach Claude' });
     } finally {
@@ -198,7 +210,7 @@ class UsageService extends EventEmitter {
 
   accept(raw, { message = '', cache = false } = {}) {
     const fetchedAt = new Date();
-    const usage = fillUnknownPercents(parseUsage(raw), this.snapshot.usage);
+    const usage = fillUnknownPercents(parseUsage(raw), this.snapshot.usage, fetchedAt);
     if (cache) this.writeCache(raw, fetchedAt);
     this.update({ usage, fetchedAt, status: 'ok', message });
   }
@@ -252,5 +264,5 @@ class UsageService extends EventEmitter {
 }
 
 module.exports = {
-  UsageService, intervalMsFor, MIN_INTERVAL_MS, LOGIN_RECHECK_MS, MAX_BACKOFF_MS, RESUME_DELAY_MS,
+  UsageService, intervalMsFor, errorSummary, MIN_INTERVAL_MS, LOGIN_RECHECK_MS, MAX_BACKOFF_MS, RESUME_DELAY_MS,
 };

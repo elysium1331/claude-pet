@@ -94,11 +94,21 @@ function hasUsage(usage) {
   return allMeters(usage).some((m) => Number.isFinite(m.percent));
 }
 
-// Meters that came without a percent keep their last known value, or are left out when there is none.
-function fillUnknownPercents(next, prev) {
+// Reset times are compared to within a minute, since the server's carry fractions of a second.
+const SAME_WINDOW_MS = 60_000;
+
+// Meters that came without a percent keep their last known value while it still describes the same window (the same
+// reset time, not yet passed). Otherwise they are left out rather than showing the previous window's number.
+function fillUnknownPercents(next, prev, now = new Date()) {
+  const sameWindow = (m, old) => {
+    const reset = m.resetsAt?.getTime();
+    const oldReset = old.resetsAt?.getTime();
+    if (reset === undefined || oldReset === undefined) return reset === oldReset;
+    return Math.abs(reset - oldReset) < SAME_WINDOW_MS && oldReset > now.getTime();
+  };
   const fill = (m, old) => {
     if (!m || Number.isFinite(m.percent)) return m;
-    return Number.isFinite(old?.percent) ? { ...m, percent: old.percent } : null;
+    return old && Number.isFinite(old.percent) && sameWindow(m, old) ? { ...m, percent: old.percent } : null;
   };
   return {
     session: fill(next.session, prev?.session),
