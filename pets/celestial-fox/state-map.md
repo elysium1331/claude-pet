@@ -1,8 +1,8 @@
-# Celestial Fox — Batch 5, depth and locomotion
+# Celestial Fox — Batch 6, facing correction and ambient controls
 
 **Runtime file:** `celestial-fox.riv` · **Artboard:** `CelestialFox` · **State machine:** `PetStateMachine` · **View model:** `PetController` (default instance).
 
-One transparent **560 × 600** artboard. Batches 1–5 are implemented. Batch 5 adds dimensional turning in every state, orbit depth, two locomotion states and three roam reactions. All prior named IDs, properties, defaults, 102 animation definitions and existing transitions are preserved. Turning and meter trajectories receive the requested new behavior; no public state or property is renamed or renumbered.
+One transparent **560 × 600** artboard. Batches 1–6 are implemented. Batch 6 corrects settled left-facing silhouettes and adds three additive ambient Number controls. All 16 state values, 31 triggers, existing property names/IDs/defaults, public animation timelines and existing state transitions are preserved. Only internal facing helpers and the requested additive layers change.
 
 ## Persistent states
 
@@ -70,7 +70,7 @@ Durations below are authored timeline lengths. The automatic blend back can add 
 
 Visibility has its own animation layer and can run alongside fidgets. `disappear` intentionally hides the whole pet, including meters, as required by its fully invisible endpoint. If `statsOpen` remains true, `appear` restores the pet with the meters still hidden for the stats panel. `perkUp` does not cancel a latched `disappear`; call `appear` to unhide.
 
-## All view-model properties (51)
+## All view-model properties (54)
 
 | Property | Type | Range | Default | Effect |
 |---|---|---|---|---|
@@ -125,6 +125,9 @@ Visibility has its own animation layer and can run alongside fidgets. `disappear
 | `sniff` | Trigger | Event | Not fired | 2 s curious ground/air sniff |
 | `lookBack` | Trigger | Event | Not fired | 1.5 s glance opposite the selected facing direction |
 | `happyHop` | Trigger | Event | Not fired | 1 s excited arrival hop |
+| `earLeft` | Number | −1…1 | `0` | Additive rotation of the pet’s own left ear around its base; negative folds back/down, positive perks forward/up |
+| `earRight` | Number | −1…1 | `0` | Independent additive rotation of the pet’s own right ear, with the same fold/perk meaning |
+| `tailSway` | Number | −1…1 | `0` | Additive tail-bone curl: negative dips, positive lifts; tip follows the chain |
 
 
 Supply usage data and colors from the app; the file makes no network requests. Rings fill clockwise from the top. `0` is empty/dim and `100` is full. Decimal percentages work, and visual fill clamps to 0–100. **Built-in calm/amber/red banding is disabled.** Each Color property independently drives its meter's fill ring and ring glow, plus its soft halo/core illumination. Changing a usage Number changes the fill amount, not the ring color. The app supplies its own blue → yellow → orange → red interpolation and timing; color updates are immediate in the file. Set opaque RGB colors for normal use; color alpha also modulates the colored artwork. Glow has an additional fixed soft falloff. The 1/2/3-dot marks remain opaque white (`#FFFFFF`), upright, and independent of the supplied color. On the front arc at 140 × 150, each meter shell is approximately 20 px across and the fill ring approximately 2.2 px thick. The back arc eases to approximately 17 px across; dot marks scale with the orb and keep their white paint.
@@ -164,7 +167,7 @@ Tricks tuck the character into a smaller pose above the meters and return to the
 
 ## Turning and roaming
 
-Set `facing = -1` for left and `facing = 1` for right. A direction change plays a 21-frame (350 ms) turn with side-profile compression, three-quarter projection, facial parallax, independent ear/fin motion, body/head rotation and a tail sweep. The artwork uses positive scales throughout; there is no flat mirrored frame or mirrored lettering. Right-facing defaults retain the original pose. The orbs, white dot marks, sleep marks and other symbols are never mirrored. Rapid direction reversals blend into the opposite turn.
+Set `facing = -1` for left and `facing = 1` for right. A direction change plays a 21-frame (350 ms) turn with side-profile compression, three-quarter projection, facial parallax, independent ear/fin motion, body/head rotation and a tail sweep. Only intermediate turn frames use profile compression. The settled left pose is now the full reflected visual counterpart of the right pose, including head angle, both ears/fins and full tail length. Both sides have identical character silhouette dimensions. The approximately 350 ms dimensional turn remains in place; a settled direction change is not an instantaneous mirror flip. Right-facing defaults retain the original pose. The orbs, white dot marks, sleep marks and other symbols are never mirrored. Rapid direction reversals blend into the opposite turn.
 
 Floating poses get a tiny turn hop. Sitting, lounging and walking turn in place; the lounging tail sweeps along its ground plane. The selected state, usage data, cosmetic settings and one-shot holds continue during a turn. The `facing` property remains a Number with its original ID/default; supply only −1 or 1.
 
@@ -177,6 +180,24 @@ Idle/sitting ↔ walking and idle ↔ floating travel use 300 ms blends. Walking
 | `happyHop` | 1 s | Small squash, excited hop and happy eyes, then settles back |
 
 These three triggers use the existing interruptible reaction system, enter over 100 ms, and return over up to 180 ms. They do not change any app-owned properties. They work while held as well. Example: select `state = 14` and set `facing` before moving the window; on arrival, stop the window, select `state = 13`, and fire `happyHop` when the settle has finished. Use `state = 15` for a longer floating trip.
+
+## Ambient ear and tail controls
+
+Set `earLeft`, `earRight` and `tailSway` directly through `PetController.number(name).value`. Each defaults to 0 and accepts −1…1; values outside that range are clamped. The app supplies smoothed values. The file adds no easing, delay or spring: the current value is applied in the same animation advance. At zero, these layers are identity transforms.
+
+Ear identity is anatomical and stays attached to the same rig ear when facing changes. Each ear rotates about its established base pivot, independently of its state and reaction animation. Fold uses approximately 25°; perk uses approximately 20° to keep the large ear tips inside the original artboard envelope. The confused head-tilt loop uses about 16° at full perk to protect the upper edge. Sleeping and lounging use 40% of these offsets.
+
+The three original tail bones receive distributed additive offsets (approximately 3°, 10° and 15°), with the tip following. The sitting coil receives a smaller 4° curl. Sleeping and lounging use 40% strength. The lounging chain reverses its local rotation sign so positive still lifts on its ground plane. Downward travel is restrained near the ground: limit_reached, chasing, walking and floating_travel use 35% of the normal negative tail range; lounging uses 15% before its 40% pose factor. These are direct proportional offsets, without dead zones. This keeps the established canvas bounds and prevents a downward tail from leaving the artboard.
+
+Ambient offsets are ignored while `held = true`, during `trickSpin`, `trickFlip` and `land`, and through their authored return to the pose. Values remain stored, and resume when that override ends. Other reactions retain the additive ear/tail motion. The existing gaze and drag controls retain their screen-space directions on either facing side. Usage meters, white dot marks and symbols remain upright.
+
+```js
+const vm = pet.viewModelInstance;
+vm.number('earLeft').value = 0.6;
+vm.number('earRight').value = -0.2;
+vm.number('tailSway').value = 0.4;
+vm.number('facing').value = -1;
+```
 
 ## Cosmetics
 
@@ -208,22 +229,12 @@ Ground contact is authored at **y = 590**. A small luminous rim/under-shadow may
 
 Approximate visible bounds include meters, decoration, and glow with alpha ≥ 16/255, sampled across the independent orbit and pose loops. Coordinates are **left / top / right / bottom** in artboard pixels; soft outermost glow can extend a little farther.
 
-| Pose / facing | Growth 0 bounds | Growth 3 bounds |
-|---|---|---|
-| Idle / right | `68 / 27 / 492 / 553` | `68 / 27 / 492 / 561` |
-| Idle / left | `68 / 20 / 492 / 543` | `68 / 20 / 492 / 552` |
-| Lounging / right | `12 / 376 / 451 / 598` | `12 / 376 / 451 / 598` |
-| Lounging / left | `12 / 376 / 384 / 595` | `12 / 376 / 384 / 595` |
-| Chasing / right | `68 / 30 / 492 / 578` | `68 / 30 / 492 / 585` |
-| Chasing / left | `68 / 26 / 492 / 573` | `68 / 26 / 492 / 580` |
-| Sitting / right | `48 / 328 / 512 / 593` | `48 / 328 / 512 / 593` |
-| Sitting / left | `48 / 320 / 512 / 593` | `48 / 320 / 512 / 593` |
-| Walking / right | `48 / 306 / 512 / 593` | `48 / 306 / 512 / 594` |
-| Walking / left | `48 / 300 / 512 / 593` | `48 / 300 / 512 / 593` |
-| Floating travel / right | `68 / 33 / 492 / 579` | `68 / 33 / 492 / 587` |
-| Floating travel / left | `68 / 23 / 492 / 587` | `68 / 23 / 492 / 594` |
+| Idle / facing | Growth 3, all ambient controls = 1 |
+|---|---|
+| Right | `68 / 4 / 492 / 510` |
+| Left | `68 / 4 / 492 / 510` |
 
-Bounds include a full orbit envelope and sampled pose phases, using alpha ≥ 16/255. Growth 0/3 comparisons remain within ±5%; all samples stay within the 560 × 600 artboard. Do not crop individual poses or move the ground line. The front/back meter envelopes intentionally differ from earlier flat-orbit revisions.
+Values are left / top / right / bottom on the 560 × 600 artboard, with exclusive right/bottom coordinates. They include sampled idle phases and a complete 24-second meter orbit, using alpha ≥ 16/255. Both faces use the full silhouette. These Batch 6 measurements replace the obsolete compressed-left measurements. Keep the complete artboard and the y = 590 ground reference; do not crop or rescale individual states.
 
 ## Integration with @rive-app/webgl2 2.42.1
 
@@ -293,8 +304,10 @@ Runtime caveats:
 - At small display sizes, use a device-pixel-ratio-sized drawing surface and the complete artboard aspect ratio. `lightBackdrop` strengthens the character's rim/shadow without painting a background.
 - Pause when the host window is genuinely offscreen. Respect reduced-motion preferences by letting a selected pose settle and then pausing. The file contains no timer, app scheduling, or usage fetching logic.
 
-## Batch 5 verification and source
+## Batch 6 verification and source
 
-Verified with the official local `@rive-app/webgl2 2.42.1` runtime, including the high-level `Rive` / `autoBind` interface. The delivered verification reports cover the old states and triggers, new loops/turns/reactions, face clearance, held overrides, stats merging, app colors, disconnected restoration and cosmetics. Contact sheets and GIFs are rendered by that runtime, on dark and white backgrounds with `lightBackdrop` set appropriately.
+Verified with the official `@rive-app/webgl2 2.42.1` runtime, including the high-level `Rive` / `autoBind` Number-property interface. The source archive includes machine-readable reports for counterpart transforms, zero-offset comparisons against Batch 5, direct ambient application, override gates, all existing triggers, stats merging and orbit face clearance.
 
-The source archive contains editable `scene.rml`, `rive.yaml`, this map, the append-only generator modules, and verification reports. Compile the RML project with Rive CLI 1.0.3 using `rive . --once`. No embedded image, font, audio or script assets are present. This is a runtime `.riv` plus RML source, not an editor `.rev` project.
+Contact sheets show all 16 states plus held, left next to right, on dark and white backgrounds at 560 × 600 and 140 × 150 per cell. The two 12-second GIFs show right/left idle at growth 3. Each runs earLeft, earRight, tailSway, then all three together, sweeping through −1 and +1 and returning to zero; dark and white views appear side by side. The GIF replay resets orbit phase because the clip is shorter than the full 24-second orbit.
+
+The source ZIP contains editable `scene.rml`, `rive.yaml`, this map, all generator modules and verification reports. Compile the RML project using Rive CLI 1.0.3: `rive . --once`. No images, fonts, audio, scripts or external assets are embedded in the `.riv`. This is a runtime `.riv` plus editable RML source, not an editor `.rev` project.

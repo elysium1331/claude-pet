@@ -93,31 +93,31 @@
     { "trigger": "sniff", "ms": 2000, "states": ["sitting"] }
   ],
   "bodyInsets": {
-    "right": { "top": 0.045, "right": 0.121, "bottom": 0.065, "left": 0.121 },
-    "left": { "top": 0.033, "right": 0.121, "bottom": 0.08, "left": 0.121 }
+    "right": { "top": 0.007, "right": 0.121, "bottom": 0.065, "left": 0.121 },
+    "left": { "top": 0.007, "right": 0.121, "bottom": 0.065, "left": 0.121 }
   },
   "stateInsets": {
     "lounging": {
-      "right": { "top": 0.627, "right": 0.195, "bottom": 0.017, "left": 0.021 },
-      "left": { "top": 0.627, "right": 0.314, "bottom": 0.017, "left": 0.021 }
+      "right": { "top": 0.6, "right": 0.195, "bottom": 0.017, "left": 0.021 },
+      "left": { "top": 0.6, "right": 0.021, "bottom": 0.017, "left": 0.195 }
     },
     "sitting": {
-      "right": { "top": 0.547, "right": 0.086, "bottom": 0.012, "left": 0.086 },
-      "left": { "top": 0.533, "right": 0.086, "bottom": 0.012, "left": 0.086 }
-    },
-    "walking": {
-      "right": { "top": 0.51, "right": 0.086, "bottom": 0.012, "left": 0.086 },
+      "right": { "top": 0.5, "right": 0.086, "bottom": 0.012, "left": 0.086 },
       "left": { "top": 0.5, "right": 0.086, "bottom": 0.012, "left": 0.086 }
     },
+    "walking": {
+      "right": { "top": 0.47, "right": 0.086, "bottom": 0.012, "left": 0.086 },
+      "left": { "top": 0.47, "right": 0.086, "bottom": 0.012, "left": 0.086 }
+    },
     "floatingTravel": {
-      "right": { "top": 0.055, "right": 0.121, "bottom": 0.022, "left": 0.121 },
-      "left": { "top": 0.038, "right": 0.121, "bottom": 0.01, "left": 0.121 }
+      "right": { "top": 0.007, "right": 0.121, "bottom": 0.01, "left": 0.121 },
+      "left": { "top": 0.007, "right": 0.121, "bottom": 0.01, "left": 0.121 }
     },
     "chasing": {
-      "right": { "top": 0.05, "right": 0.121, "bottom": 0.025, "left": 0.121 },
-      "left": { "top": 0.043, "right": 0.121, "bottom": 0.033, "left": 0.121 }
+      "right": { "top": 0.007, "right": 0.121, "bottom": 0.025, "left": 0.121 },
+      "left": { "top": 0.007, "right": 0.121, "bottom": 0.025, "left": 0.121 }
     },
-    "held": { "top": 0.028, "right": 0.121, "bottom": 0.038, "left": 0.121 }
+    "held": { "top": 0.007, "right": 0.121, "bottom": 0.038, "left": 0.121 }
   },
   "size": { "width": 560, "height": 600 }
 }
