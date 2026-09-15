@@ -116,6 +116,7 @@ function parseArgs(argv) {
     palette: get('palette'), // force a color theme for screenshots
     night: get('night'), // 'true' | 'false' to force night glow
     roamNow: argv.includes('--roam-now'), // start a free-roam trip right after launch
+    roamAt: Number(get('roam-at')) || 0, // start a free-roam trip this many ms after launch
     scale: get('scale'), // override the pet size for screenshots
     startAt: startAt?.length === 2 && startAt.every(Number.isFinite) ? { x: startAt[0], y: startAt[1] } : null,
   };
@@ -590,7 +591,9 @@ function startRoam() {
     cursor: screen.getCursorScreenPoint(),
   });
   const wasResting = petState === 'lounging';
-  roam = { plan, home: { ...petPos }, index: 0, pauseUntil: 0, waitingSince: 0, timer: null };
+  // A resting pet gets up (wake-up hop) before it starts walking.
+  const startAt = Date.now() + (wasResting && pet.reactions?.wake ? 1600 : 0);
+  roam = { plan, home: { ...petPos }, index: 0, pauseUntil: 0, waitingSince: 0, timer: null, startAt };
   if (wasResting) sendReaction(pet.reactions?.wake);
   pushView();
   roam.timer = setInterval(roamStep, ROAM_STEP_MS);
@@ -599,6 +602,7 @@ function startRoam() {
 function roamStep() {
   if (quitting || !roam || !windowAlive(petWin)) return;
   const now = Date.now();
+  if (now < roam.startAt) return;
   if (roam.pauseUntil) {
     if (now < roam.pauseUntil) return;
     roam.pauseUntil = 0;
@@ -1167,6 +1171,7 @@ function scheduleSnapshot() {
   if (args.snapshotStats) setTimeout(openStats, 3500);
   if (args.reaction) setTimeout(() => sendReaction(args.reaction), 5000);
   if (args.roamNow) setTimeout(startRoam, 2500);
+  if (args.roamAt) setTimeout(startRoam, args.roamAt);
   setTimeout(async () => {
     fs.writeFileSync(args.snapshot, (await petWin.webContents.capturePage()).toPNG());
     const work = workAreaAt(petCenter());

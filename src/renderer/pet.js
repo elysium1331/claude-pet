@@ -88,6 +88,10 @@ function playReaction(name) {
   }
   const trigger = vm.trigger(name);
   if (trigger) trigger.trigger();
+  if (name === petConfig.reactions?.wake) {
+    // The wake-up hop resets the pose to idle inside the pet file; put back the pose the app wants once it's done.
+    setTimeout(applyPet, 1600);
+  }
 }
 
 function applyPet() {
