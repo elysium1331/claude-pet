@@ -103,6 +103,8 @@ function choosePetState({
   loungeAfterMs = 3 * 60_000,
   awayAfterMs = 10 * 60_000,
   activity = null, // Claude Code: 'waiting' | 'busy' | 'thinking' | null
+  claudeQuietMs = Infinity, // time since the last Claude Code event
+  loungeGraceMs = 30_000, // after Claude goes quiet, wait this long before lying back down
 }) {
   if (activity === 'waiting') return 'needsAttention';
   if (!claudeRunning && !activity) return 'sleeping';
@@ -113,7 +115,7 @@ function choosePetState({
   if (userAwayMs >= awayAfterMs) return 'sleeping';
   if (needsLogin) return 'disconnected';
   if (worst >= warnAt) return 'lowUsage';
-  if (petIdleMs >= loungeAfterMs) return 'lounging';
+  if (petIdleMs >= loungeAfterMs && claudeQuietMs >= loungeGraceMs) return 'lounging';
   return 'idle';
 }
 

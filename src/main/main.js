@@ -79,6 +79,9 @@ let statsTimers = [];
 
 let petState = 'idle';
 let lastInteraction = Date.now();
+let lastInteractionReason = 'startup';
+let lastClaudeEventAt = 0;
+let lastClaudeEvent = null;
 let nextFidgetAt = 0;
 let lastViewPush = 0;
 let lastLook = { x: 0, y: 0 };
@@ -313,7 +316,9 @@ function handleUsageUpdate() {
 function handleHookEvent(event, payload) {
   const reactions = activity.handle(event, payload);
   if (args.debugHooks) console.log('[hooks]', event, payload.session_id || '', '->', reactions.join(',') || '-', '| now', activity.summary() || 'quiet');
-  lastInteraction = Date.now(); // don't flop down to lounge right after Claude finishes
+  // Claude activity shows working poses but doesn't count as touching the pet; it only delays lounging briefly.
+  lastClaudeEventAt = Date.now();
+  lastClaudeEvent = event;
   reactions.forEach(playEvent);
   if (reactions.includes('taskDone')) rewardPet('taskDone');
   tick();
@@ -360,9 +365,37 @@ function greetIfFirstToday() {
 
 // ---------- pet behavior ----------
 
-function markInteraction() {
+function markInteraction(reason = 'you interacted with the pet') {
   lastInteraction = Date.now();
+  lastInteractionReason = reason;
   if (petState === 'lounging') tick();
+}
+
+// What the pet thinks is going on, for troubleshooting: GET http://127.0.0.1:<hooksPort>/claude-pet/status
+function statusSnapshot() {
+  const now = Date.now();
+  return {
+    petState,
+    shownPose: displayState(),
+    claudeActivity: activity?.summary() ?? null,
+    claudeSessions: [...(activity?.sessions ?? new Map())].map(([id, s]) => ({
+      session: id.slice(0, 8),
+      status: s.status,
+      secondsSinceLastEvent: Math.round((now - s.lastEventAt) / 1000),
+    })),
+    secondsSincePetWasDisturbed: Math.round((now - lastInteraction) / 1000),
+    lastDisturbedBy: lastInteractionReason,
+    secondsSinceClaudeEvent: lastClaudeEventAt ? Math.round((now - lastClaudeEventAt) / 1000) : null,
+    lastClaudeEvent,
+    loungesAfterSeconds: config.loungeAfterMinutes * 60,
+    secondsSinceKeyboardOrMouse: powerMonitor.getSystemIdleTime(),
+    claudeAppRunning: claudeRunning,
+    usageStatus: usage?.snapshot.status,
+    grounded,
+    statsOpen,
+    roaming: !!roam,
+    visible: windowAlive(petWin) && petWin.isVisible(),
+  };
 }
 
 function computePetState(now = Date.now()) {
@@ -376,6 +409,7 @@ function computePetState(now = Date.now()) {
     loungeAfterMs: config.loungeAfterMinutes * 60_000,
     awayAfterMs: config.sleepWhenAwayMinutes * 60_000,
     activity: activity.summary(),
+    claudeQuietMs: now - lastClaudeEventAt,
   });
 }
 
@@ -836,6 +870,7 @@ function closeStats() {
   if (!statsOpen) return;
   statsOpen = false;
   lastInteraction = Date.now();
+  lastInteractionReason = 'stats panel closed';
   clearStatsTimers();
   panelWin.webContents.send('panel:close');
   statsTimers.push(setTimeout(() => {
@@ -1162,7 +1197,7 @@ app.whenReady().then(async () => {
   usage.on('update', handleUsageUpdate);
 
   activity = new ClaudeActivity({ celebrateAfterMs: config.celebrateAfterSeconds * 1000 });
-  if (!args.snapshot || args.debugHooks) startHookServer({ port: config.hooksPort, onEvent: handleHookEvent });
+  if (!args.snapshot || args.debugHooks) startHookServer({ port: config.hooksPort, onEvent: handleHookEvent, onStatus: statusSnapshot });
 
   createPetWindow();
   updateFacing();
