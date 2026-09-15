@@ -1,12 +1,39 @@
 # Claude Pet
 
-An animated desktop pet that shows your Claude plan usage at a glance: your current session, your weekly limit, and any per-model weekly limit, each with its reset time.
+**Meet Lumi**, a little celestial fox who lives on your Windows taskbar and keeps an eye on your Claude plan usage, so you never have to open the usage page to know where you stand.
 
 > **Unofficial.** Claude Pet is a community project and is not affiliated with or endorsed by Anthropic. It reads usage from an undocumented endpoint that can change or break at any time.
 
-![Celestial fox preview](pets/celestial-fox/preview-dark.png)
+<p align="center">
+  <img src="docs/lumi.png" width="225" alt="Lumi, the celestial fox, with three glowing usage orbs">
+  &nbsp;&nbsp;
+  <img src="docs/stats.png" width="300" alt="Lumi's stats panel: session, weekly and Fable usage with reset times">
+</p>
+
+## Highlights
+
+- **Your usage at a glance.** Three glowing orbs circle Lumi: your current session, your weekly limit and your per-model weekly limit (like Fable). Their rings fill and shift from blue to yellow, orange and red as you get close to a limit.
+- **Full stats in one click.** Click Lumi and the orbs merge into a panel with percentages, bars, reset times and countdowns.
+- **Reacts to Claude Code.** Lumi thinks while Claude reads your prompt, gets busy while it runs tools, rings a bell when Claude needs your permission, and celebrates when a long task finishes. Connecting takes one click, and it's optional.
+- **Feels alive.** Blinks, twitches its ears, wags its tail, watches your cursor, stretches and yawns, lounges on the taskbar when you leave it alone, and wanders off for a little stroll now and then.
+- **Play with it.** Drag it, pet it, tickle it, feed it sparks, have it chase your cursor or do tricks. Lumi gains happiness and experience, and grows longer tail wisps, extra sparkle and finally a halo as it levels up.
+- **Make it yours.** Four sizes from Small to Extra large, four color themes, an automatic night glow, and support for custom pets.
+- **Stays out of your way.** Clicks pass through the space around Lumi, `Ctrl+Alt+P` hides it for games and screen shares, and it sleeps while you're away.
+
+<p align="center">
+  <img src="docs/theme-0.png" width="150" alt="Lumi in celestial blue">
+  <img src="docs/theme-1.png" width="150" alt="Lumi in rose gold">
+  <img src="docs/theme-2.png" width="150" alt="Lumi in mint aqua">
+  <img src="docs/theme-3.png" width="150" alt="Lumi in violet silver">
+  <img src="docs/lumi-grown.png" width="150" alt="Lumi fully grown, with a halo and crown">
+  <br>
+  <sub>Celestial blue · Rose gold · Mint aqua · Violet silver · Fully grown</sub>
+</p>
 
 ## What it does
+
+The built-in pet is Lumi, a Celestial Fox. Below, "the pet" means Lumi or whichever pet you choose.
+
 
 - Sits on your taskbar (bottom-left by default). Drag it anywhere; it stays on screen and snaps back onto the taskbar when you drop it near it.
 - If your taskbar is at the top or side, hides itself, or isn't on that monitor, the bottom of the screen is its ground instead. It keeps a few pixels clear of the screen edges so a hidden taskbar can still slide out, and with a hidden taskbar it starts a little way in from the left, clear of the Start or Widgets button. A taskbar that slides out can still cover it; drag it aside if it's in the way.
@@ -27,7 +54,7 @@ An animated desktop pet that shows your Claude plan usage at a glance: your curr
 - **Free roam**: every 10–25 minutes, when nothing's going on, it takes a little trip along the taskbar (or, if you allow it, somewhere on screen), pauses to look around, and comes back. It waits for your cursor to move out of its way, heads home if Claude needs you, and clicking it calls it home. Changing its size or your monitors during a trip also sends it home. Choose off / along the taskbar / anywhere on screen under right-click → **Play**, or send it on a stroll right away (available while it's idle, sitting or lounging).
 - Playing and finished Claude Code tasks raise its happiness and experience; ignored for hours, it gets a little droopy.
 - It grows as it levels up (level 1 at 30 XP, 2 at 120, 3 at 300): longer tail wisps, then an extra antenna pearl and brighter stars, then a soft halo and crown.
-- Right-click → **Appearance** to pick a color theme (celestial blue, rose gold, mint aqua, violet silver) and the night glow: softer light between 10 PM and 7 AM by default, or always / never. The usage orbs keep their colors in every theme.
+- Right-click → **Appearance** to pick its size (Small, Normal, Large or Extra large), a color theme (celestial blue, rose gold, mint aqua, violet silver) and the night glow: softer light between 10 PM and 7 AM by default, or always / never. The same menu chooses whether it floats or sits on the taskbar and turns the ear and tail twitches on or off. The usage orbs keep their colors in every theme.
 - Tray icon: click it to show or hide the pet. Right-click it for the same menu as the pet: stats, Play, Appearance, refresh usage now, Claude's usage page, launch at startup, the Claude Code connection, settings, troubleshooting info and quit.
 - `Ctrl+Alt+P` hides or shows it (for windowed games, screen shares, and so on). While hidden it stays silent. `Alt+F4` on the pet hides it too; quit from the tray or right-click menu.
 
@@ -133,7 +160,7 @@ Right-click the pet or the tray icon and choose **Open settings file** (`%APPDAT
 
 A pet is a folder with a [Rive](https://rive.app) file and a `pet.json` that maps the app's values onto the file's view model. Put your own pets in the `pets` folder next to your settings file, for example `%APPDATA%\claude-pet\pets\my-pet\pet.json`, then set `"pet": "my-pet"` in the settings. Give it a folder name no built-in pet uses: a built-in pet with the same name is always chosen first. (The built-in pets are in the app's own `pets/` folder, which is read-only in the installed app.)
 
-If the chosen pet is missing, its `pet.json` has a mistake, or its Rive file can't be drawn, Claude Pet shows the built-in Celestial Fox instead and tells you what went wrong.
+If the chosen pet is missing, its `pet.json` has a mistake, or its Rive file can't be drawn, Claude Pet shows Lumi, the built-in Celestial Fox, instead and tells you what went wrong.
 
 The smallest pet needs a file, its poses and a `stateProperty` binding (plus `artboard` and `stateMachine` if the file's defaults aren't the ones to use):
 
@@ -295,4 +322,4 @@ Snapshot runs use their own profile, `%TEMP%\claude-pet-snapshot`, not your `%AP
 
 [MIT](LICENSE), copyright 2026 elysium1331.
 
-The built-in Celestial Fox pet (everything in `pets/celestial-fox`: the Rive file, its source archive and the preview images) is included under the same license.
+Lumi, the built-in Celestial Fox pet (everything in `pets/celestial-fox`: the Rive file, its source archive and the preview images), and the screenshots in `docs/` are included under the same license.
