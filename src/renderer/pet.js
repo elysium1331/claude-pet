@@ -21,7 +21,6 @@ let lastView = null;
 let stats = { open: false, side: 'above' };
 let hovered = false;
 let held = { held: false, lean: 0 };
-let lastHoverSent = 0;
 let wakeRestorePending = false;
 let wakeTimer = null;
 const pendingReactions = [];
@@ -231,75 +230,17 @@ window.petHost.onLook(({ x, y }) => {
 });
 
 // Decided by the main process: only the body counts, not the see-through margins of the window around it.
+// (The pointer itself is shaped by the hit-area window over the body.)
 window.petHost.onHover((over) => {
   hovered = !!over;
   canvas.classList.toggle('hovered', hovered);
   applyPet();
 });
 
-// ---------- click, drag, menu ----------
-
-let pressed = false;
-let moved = false;
-let downAt = null;
-
-canvas.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0 || pressed) return; // a second finger or pen doesn't start another press
-  pressed = true;
-  moved = false;
-  downAt = { x: e.screenX, y: e.screenY };
-  try {
-    canvas.setPointerCapture(e.pointerId);
-  } catch {
-    // the pointer is already gone; the press ends on the next move
-  }
-  window.petHost.press(); // the window keeps taking the mouse until the press ends, even off the body
-});
-
-// Every way a press ends. Only a release is a click, and a started drag always reports its end, or the main process
-// would keep carrying the pet around.
-function endPress(cancelled) {
-  if (!pressed) return;
-  pressed = false;
-  canvas.classList.remove('dragging');
-  if (moved) window.petHost.dragEnd();
-  else if (cancelled) window.petHost.release();
-  else window.petHost.click(); // main process counts clicks: 1 = stats, 2 = trick, 3+ = tickle
-}
-
-canvas.addEventListener('pointermove', (e) => {
-  if (pressed && (e.buttons & 1) === 0) endPress(true); // released somewhere this window never heard about
-  if (!pressed) {
-    // rubbing the cursor back and forth pets the pet; main process recognizes the gesture
-    if (e.timeStamp - lastHoverSent > 30) {
-      lastHoverSent = e.timeStamp;
-      window.petHost.hoverMove(e.screenX);
-    }
-    return;
-  }
-  if (!moved && Math.hypot(e.screenX - downAt.x, e.screenY - downAt.y) > 4) {
-    moved = true;
-    canvas.classList.add('dragging');
-    window.petHost.dragStart();
-  }
-  if (moved) window.petHost.dragMove();
-});
-
-canvas.addEventListener('pointerup', () => endPress(false));
-canvas.addEventListener('pointercancel', () => endPress(true)); // e.g. the system took over a touch
-canvas.addEventListener('lostpointercapture', () => endPress(true)); // after a pointerup there's nothing left to end
+// Clicks, drags, touches and right-clicks never reach this window: the hit-area window over the body takes them.
 
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && wakeRestorePending) scheduleWakeRestore();
-});
-
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') window.petHost.closeStats();
-});
-
-document.addEventListener('contextmenu', (e) => {
-  e.preventDefault();
-  window.petHost.contextMenu();
 });
 
 initPet();

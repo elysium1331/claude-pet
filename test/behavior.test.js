@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  insetsForState, gotUp, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, shouldGreet, restingPose, isNightTime,
-  resolveState, usageRose,
+  insetsForState, gotUp, wokeUp, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, shouldGreet, restingPose,
+  isNightTime, resolveState, usageRose,
 } = require('../src/main/behavior');
 const { parseUsage } = require('../src/main/usage-parse');
 
@@ -82,6 +82,14 @@ test('gotUp is true only when the pet leaves a resting pose', () => {
   assert.equal(gotUp('sleeping', 'lounging'), false);
   assert.equal(gotUp('idle', 'working'), false);
   assert.equal(gotUp('idle', 'sleeping'), false);
+});
+
+test('wokeUp is true whenever the pet leaves sleep, even to lie down awake', () => {
+  assert.equal(wokeUp('sleeping', 'idle'), true);
+  assert.equal(wokeUp('sleeping', 'lounging'), true); // a lounging pet can still wave hello
+  assert.equal(wokeUp('lounging', 'idle'), false);
+  assert.equal(wokeUp('idle', 'sleeping'), false);
+  assert.equal(wokeUp('sleeping', 'sleeping'), false);
 });
 
 test('fidgetsFor only offers fidgets that fit the current pose (idle by default)', () => {

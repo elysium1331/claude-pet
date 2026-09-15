@@ -15,6 +15,12 @@ function gotUp(previousState, nextState) {
   return RESTING_STATES.has(previousState) && !RESTING_STATES.has(nextState);
 }
 
+// True when the pet wakes from sleep, into any pose. Sleep is the only pose that can't wave hello, so the daily greeting
+// is tried again then: a pet that wakes into lounging (away for a while, pet untouched) can still greet.
+function wokeUp(previousState, nextState) {
+  return previousState === 'sleeping' && nextState !== 'sleeping';
+}
+
 // Reaction to play when the pet gets up from a resting pose, or null.
 function wakeReaction(pet, previousState, nextState) {
   const wake = pet.reactions?.wake;
@@ -109,6 +115,7 @@ module.exports = {
   restingPose,
   insetsForState,
   gotUp,
+  wokeUp,
   wakeReaction,
   fidgetsFor,
   lookFromCursor,

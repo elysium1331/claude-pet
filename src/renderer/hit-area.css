@@ -1,0 +1,21 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+#hit-area {
+  width: 100vw;
+  height: 100vh;
+  /* not quite transparent: some Windows setups let clicks through wherever a transparent window paints nothing */
+  background: rgba(0, 0, 0, 0.01);
+  cursor: pointer;
+  /* a finger drag moves the pet; otherwise the browser takes it over as a pan and cancels the drag */
+  touch-action: none;
+}
+
+#hit-area.dragging {
+  cursor: grabbing;
+}

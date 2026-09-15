@@ -9,7 +9,7 @@ const PetAmbient = require('../src/renderer/ambient');
 const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'pet.js'), 'utf8');
 
 function loadPetScript(petConfig, options = {}) {
-  const host = { failures: [], handlers: {}, sent: [] };
+  const host = { failures: [], handlers: {} };
   const props = {};
   const triggers = [];
   const viewModel = {
@@ -20,13 +20,8 @@ function loadPetScript(petConfig, options = {}) {
   };
   let riveOptions = null;
   let frames = 0;
-  const canvasListeners = {};
   const documentListeners = {};
-  const element = {
-    addEventListener: (type, fn) => { canvasListeners[type] = fn; },
-    setPointerCapture() {},
-    classList: { add() {}, remove() {}, toggle() {} },
-  };
+  const element = { classList: { toggle() {} } };
   const document = {
     hidden: false,
     getElementById: () => element,
@@ -34,7 +29,6 @@ function loadPetScript(petConfig, options = {}) {
     body: { classList: { toggle() {} } },
   };
   const on = (name) => (callback) => { host.handlers[name] = callback; };
-  const record = (name) => (...args) => { host.sent.push([name, ...args]); };
   const context = {
     console: { error() {}, log() {}, warn() {} },
     setTimeout: options.setTimeout ?? setTimeout,
@@ -54,15 +48,6 @@ function loadPetScript(petConfig, options = {}) {
         onHeld: on('held'),
         onLook: on('look'),
         onHover: on('hover'),
-        press: record('press'),
-        release: record('release'),
-        click: record('click'),
-        dragStart: record('dragStart'),
-        dragMove: record('dragMove'),
-        dragEnd: record('dragEnd'),
-        hoverMove: record('hoverMove'),
-        closeStats: record('closeStats'),
-        contextMenu: record('contextMenu'),
       },
     },
     rive: {
@@ -91,16 +76,13 @@ function loadPetScript(petConfig, options = {}) {
     get riveOptions() { return riveOptions; },
     get frames() { return frames; },
     pending: () => vm.runInContext('pendingReactions.length', context),
-    pointer: (type, event = {}) => canvasListeners[type](event),
     fire: (type) => documentListeners[type](),
-    sentNames: () => host.sent.map(([name]) => name),
     frame: () => vm.runInContext('smoothLook()', context),
   };
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const view = { petState: 'working', orbs: {}, orbColors: {}, facing: 1 };
-const press = { button: 0, buttons: 1, pointerId: 1, screenX: 100, screenY: 100, timeStamp: 0 };
 
 test('a Rive load failure is reported to the main process once and stops queueing reactions', async () => {
   const pet = loadPetScript({ states: { idle: 0 }, binding: {}, reactions: {} });
@@ -131,36 +113,6 @@ test('states inherited from Object.prototype are not treated as poses', async ()
   pet.host.handlers.view({ ...view, petState: 'constructor' });
   pet.riveOptions.onLoad();
   assert.equal(pet.props.state.value, 4);
-});
-
-test('a drag the system cancels (e.g. a touch pan) still ends, and hovering afterwards does not move the pet', async () => {
-  const pet = loadPetScript({ states: { idle: 0 }, binding: {}, reactions: {} });
-  await flush();
-  pet.pointer('pointerdown', press);
-  pet.pointer('pointermove', { ...press, screenX: 120, timeStamp: 10 });
-  pet.pointer('pointercancel');
-  pet.pointer('pointermove', { ...press, buttons: 0, screenX: 130, timeStamp: 100 });
-  assert.deepEqual(pet.sentNames(), ['press', 'dragStart', 'dragMove', 'dragEnd', 'hoverMove']);
-});
-
-test('a press whose release never arrives ends on the next move with no button down, and is not a click', async () => {
-  const pet = loadPetScript({ states: { idle: 0 }, binding: {}, reactions: {} });
-  await flush();
-  pet.pointer('pointerdown', press);
-  pet.pointer('pointermove', { ...press, buttons: 0, screenX: 101, timeStamp: 100 });
-  assert.deepEqual(pet.sentNames(), ['press', 'release', 'hoverMove']);
-});
-
-test('losing pointer capture ends a press; a second pointer does not start another; a normal release is a click', async () => {
-  const pet = loadPetScript({ states: { idle: 0 }, binding: {}, reactions: {} });
-  await flush();
-  pet.pointer('pointerdown', press);
-  pet.pointer('pointerdown', { ...press, pointerId: 2 });
-  pet.pointer('lostpointercapture');
-  pet.pointer('pointerdown', press);
-  pet.pointer('pointerup', press);
-  pet.pointer('lostpointercapture'); // always follows a pointerup
-  assert.deepEqual(pet.sentNames(), ['press', 'release', 'press', 'click']);
 });
 
 test('the hovered look follows the main process, which only counts the body', async () => {

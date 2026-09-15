@@ -23,9 +23,9 @@ const {
 const {
   clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
 } = require('./placement');
-const { pointerPlan } = require('./click-through');
+const { pointerPlan, hitAreaBounds } = require('./click-through');
 const {
-  restingPose, insetsForState, gotUp, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey,
+  restingPose, insetsForState, wokeUp, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey,
   shouldGreet, isNightTime, resolveState, usageRose,
 } = require('./behavior');
 const { ClaudeActivity } = require('./claude-activity');
@@ -81,6 +81,7 @@ if (!args.snapshot && !args.removeHooks && !app.requestSingleInstanceLock()) {
 logStrayErrors(process, logError);
 
 let petWin = null;
+let hitWin = null; // invisible, over the pet's body: takes its clicks, drags and touches (see updatePointer)
 let panelWin = null;
 let tray = null;
 let config = null;
@@ -102,10 +103,10 @@ let chase = null;
 let roam = null;
 let nextRoamAt = 0;
 let pressed = false; // a press on the pet is under way (the renderer reports when it starts and ends)
-const pointer = { clickThrough: null, overBody: false, hovered: false }; // what the pet window was last set to
+const pointer = { overBody: false, hovered: false, hitBounds: null }; // what the windows were last set to
 let hiding = false; // the disappear animation is playing; the window hides when it ends
 let hideTimer = null;
-let greetAt = 0; // when to try the daily greeting (0: not until the pet is shown or gets up)
+let greetAt = 0; // when to try the daily greeting (0: not until the pet is shown or wakes)
 
 let statsOpen = false;
 let panelSize = { width: 212, height: 180 };
@@ -256,7 +257,7 @@ function handlePetLoadFailure(message) {
   }
   if (plan !== 'ignoreMouse') return;
   petDrawFailed = true;
-  petWin.setIgnoreMouseEvents(true);
+  updatePointer(); // hides the hit area; the pet window itself never takes the mouse
   showNotice(
     'Claude Pet could not draw the pet on this computer.',
     `Your usage is still available from the tray icon (hover it, or choose Show usage stats). Details: ${message}`,
@@ -687,7 +688,7 @@ function tick() {
   if (next !== petState) {
     // A hidden window doesn't animate: a hop sent now would play, and reset the pose, whenever it's shown again.
     if (petVisible()) sendReaction(wakeReaction(pet, petState, next));
-    if (gotUp(petState, next)) greetAt = now + GREET_DELAY_MS; // a pet that started asleep says hello once it's up
+    if (wokeUp(petState, next)) greetAt = now + GREET_DELAY_MS; // a pet that started asleep says hello once awake
     petState = next;
     pushView();
     if (!chase && !drag && !roam) {
@@ -1077,23 +1078,48 @@ function createPetWindow() {
 
   petWin = new BrowserWindow({ ...baseWindowOptions(), ...petPos, ...PET_SIZE });
   petWin.setAlwaysOnTop(true, 'floating');
+  petWin.setIgnoreMouseEvents(true); // the see-through margins pass clicks on; the hit area takes the body's
   petWin.once('ready-to-show', () => {
     petWin.showInactive();
+    updatePointer(); // shows the hit area over the body
     greetAt = Date.now() + GREET_DELAY_MS;
   });
-  // Alt+F4 on the focused pet would destroy its window while the app keeps running in the tray: hide it instead.
-  petWin.on('close', (event) => {
+  hideInsteadOfClosing(petWin);
+  petWin.on('blur', closeStats); // clicking anywhere else closes the stats
+  petWin.webContents.on('did-finish-load', () => {
+    pointer.hovered = false; // a freshly loaded page isn't showing a hover
+    pushView();
+  });
+  petWin.loadURL('app://bundle/src/renderer/pet.html');
+}
+
+// The pet window never takes input, so an invisible window kept over the body takes the pet's clicks, drags, touches
+// and right-clicks. It is never click-through, so a finger lands on it wherever the cursor last was.
+function createHitAreaWindow() {
+  hitWin = new BrowserWindow({ ...baseWindowOptions(), ...hitAreaBounds(petPos, PET_SIZE, currentInsets()) });
+  hitWin.setAlwaysOnTop(true, 'floating');
+  hideInsteadOfClosing(hitWin);
+  hitWin.on('blur', closeStats); // the window a click on the pet gives focus to: clicking anywhere else closes the stats
+  hitWin.webContents.on('did-finish-load', () => {
+    pressed = false; // a freshly loaded page has no press under way
+    updatePointer();
+  });
+  hitWin.loadURL('app://bundle/src/renderer/hit-area.html');
+}
+
+// Alt+F4 on a focused pet window would destroy it while the app keeps running in the tray: hide the pet instead.
+function hideInsteadOfClosing(win) {
+  win.on('close', (event) => {
     if (quitting) return;
     event.preventDefault();
     hidePet();
   });
-  petWin.on('blur', closeStats); // clicking anywhere else closes the stats
-  petWin.webContents.on('did-finish-load', () => {
-    pressed = false; // a freshly loaded page has no press under way and isn't showing a hover
-    pointer.hovered = false;
-    pushView();
-  });
-  petWin.loadURL('app://bundle/src/renderer/pet.html');
+}
+
+// The pet's window that takes focus and owns its menu: the hit area, unless the pet can't be drawn.
+function inputWindow() {
+  if (windowAlive(hitWin) && hitWin.isVisible()) return hitWin;
+  return windowAlive(petWin) ? petWin : null;
 }
 
 function createPanelWindow() {
@@ -1164,7 +1190,7 @@ function closeStats() {
 function showStatsFromMenu() {
   if (!windowAlive(petWin)) return;
   if (!petVisible()) showPet();
-  petWin.focus(); // so clicking elsewhere closes it again
+  inputWindow()?.focus(); // so clicking elsewhere closes it again
   openStats();
 }
 
@@ -1175,6 +1201,7 @@ function showPet() {
   hideTimer = null;
   hiding = false;
   petWin.showInactive();
+  updatePointer(); // the hit area comes back with the pet
   sendReaction(pet.reactions?.appear); // also undoes a disappear still playing, which would hold the pet invisible
   if (wasHidden) greetAt = Date.now() + GREET_DELAY_MS;
   refreshTrayMenu();
@@ -1189,6 +1216,7 @@ function hidePet() {
   if (home) setPetBounds(home); // reappear at home, not mid-trip
   // Counts as hidden from now on, so toggling again during the animation shows the pet instead of hiding it twice.
   hiding = true;
+  updatePointer(); // a disappearing pet takes no more clicks
   sendReaction(pet.reactions?.disappear);
   hideTimer = setTimeout(guarded('hiding the pet', finishHiding), pet.reactions?.disappear ? pet.timings.disappearMs : 0);
   refreshTrayMenu();
@@ -1197,6 +1225,7 @@ function hidePet() {
 function finishHiding() {
   hideTimer = null;
   hiding = false;
+  pressed = false; // a hidden pet never hears a release
   if (quitting || !windowAlive(petWin)) return;
   petWin.hide();
   refreshTrayMenu();
@@ -1266,10 +1295,13 @@ function trackCursor() {
   petWin.webContents.send('pet:look', next);
 }
 
-// Clicks on the see-through margins of the pet box go to the window below; only the body takes the mouse.
-// Checked on every mouse move over the window, whenever the pet moves or changes pose, and on a timer.
+// Clicks on the see-through margins of the pet box go to the window below: the pet window never takes the mouse, and
+// the hit-area window, kept over the body while the pet can be touched, takes the body's (see click-through.js).
+// Checked whenever the pet moves, changes pose, is shown or hidden, on every mouse move over the body, and on a timer.
 function updatePointer() {
-  if (quitting || petDrawFailed || !windowAlive(petWin) || !petWin.isVisible() || !petPos) return;
+  if (quitting || !windowAlive(petWin) || !petPos) return;
+  placeHitArea();
+  if (petDrawFailed || !petWin.isVisible()) return;
   const plan = pointerPlan({
     cursor: screen.getCursorScreenPoint(),
     petPos,
@@ -1278,16 +1310,25 @@ function updatePointer() {
     holding: pressed || !!drag,
   });
   pointer.overBody = plan.overBody;
-  if (plan.clickThrough !== pointer.clickThrough) {
-    pointer.clickThrough = plan.clickThrough;
-    // forward: mouse moves still reach the page while clicks pass through, so reaching the body is noticed at once
-    if (plan.clickThrough) petWin.setIgnoreMouseEvents(true, { forward: true });
-    else petWin.setIgnoreMouseEvents(false);
-  }
   if (plan.hovered !== pointer.hovered) {
     pointer.hovered = plan.hovered;
     petWin.webContents.send('pet:hover', plan.hovered);
   }
+}
+
+function placeHitArea() {
+  if (!windowAlive(hitWin)) return;
+  if (!petVisible() || petDrawFailed) {
+    if (hitWin.isVisible()) hitWin.hide();
+    return;
+  }
+  const bounds = hitAreaBounds(petPos, PET_SIZE, currentInsets());
+  const last = pointer.hitBounds;
+  if (!last || last.x !== bounds.x || last.y !== bounds.y || last.width !== bounds.width || last.height !== bounds.height) {
+    pointer.hitBounds = bounds;
+    hitWin.setBounds(bounds);
+  }
+  if (!hitWin.isVisible()) hitWin.showInactive();
 }
 
 // ---------- tray ----------
@@ -1513,6 +1554,7 @@ function registerIpc() {
   });
 
   ipcMain.on('pet:press', () => {
+    if (!petVisible()) return; // sent just as the pet started to disappear: its release may never come
     pressed = true;
     updatePointer();
   });
@@ -1529,7 +1571,7 @@ function registerIpc() {
   });
 
   ipcMain.on('pet:hover-move', (_event, x) => {
-    updatePointer(); // mouse moves over the click-through margins arrive here too
+    updatePointer(); // from the hit area, which can lag a pose change by a moment
     if (drag || chase || !pointer.overBody || !Number.isFinite(x)) return; // only rubbing the body pets the pet
     if (rubDetector.add(x, Date.now())) {
       markInteraction();
@@ -1541,7 +1583,8 @@ function registerIpc() {
   ipcMain.on('pet:context-menu', () => {
     closeStats();
     cancelDrag(); // the menu takes the mouse, so the release never reaches the pet
-    if (windowAlive(petWin)) buildMenu().popup({ window: petWin });
+    const owner = inputWindow();
+    if (owner) buildMenu().popup({ window: owner });
   });
 
   ipcMain.on('panel:clicked', closeStats);
@@ -1624,6 +1667,7 @@ async function startApp() {
   if (!args.snapshot || args.debugHooks) startHookListener();
 
   createPetWindow();
+  createHitAreaWindow();
   updateFacing();
   createPanelWindow();
   createTray();
@@ -1633,6 +1677,7 @@ async function startApp() {
 
   // Taskbar moved, resolution changed or a monitor was unplugged: keep the pet on screen.
   const reclamp = guarded('keeping the pet on screen', () => {
+    pointer.hitBounds = null; // Windows may have resized the hit area for the new display: set its bounds again
     movePet(petPos);
     updateFacing();
   });
@@ -1651,7 +1696,7 @@ async function startApp() {
   appTimers.push(
     setInterval(guarded('tick', tick), TICK_MS),
     setInterval(guarded('gaze', trackCursor), LOOK_MS),
-    setInterval(guarded('click-through', updatePointer), LOOK_MS), // the pet can move under a cursor that stays still
+    setInterval(guarded('hover', updatePointer), LOOK_MS), // the pet can move under a cursor that stays still
   );
   nativeTheme.on('updated', guarded('theme change', pushView));
   if (args.snapshot) scheduleSnapshot();

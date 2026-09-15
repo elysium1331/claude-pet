@@ -2,21 +2,10 @@
   display: block;
   width: 100vw;
   height: 100vh;
-  /* a finger drag moves the pet; otherwise the browser takes it over as a pan and cancels the drag */
-  touch-action: none;
   /* scaling through 0 on the x axis reads as the pet turning around */
   transition: transform 0.38s cubic-bezier(0.45, 0, 0.2, 1);
 }
 
 body.flipped #pet {
   transform: scaleX(-1);
-}
-
-/* only the body: the see-through margins pass clicks to the window below */
-#pet.hovered {
-  cursor: pointer;
-}
-
-#pet.dragging {
-  cursor: grabbing;
 }
