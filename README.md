@@ -76,23 +76,27 @@ While the pet is hidden it stays silent.
 
 ## Settings
 
-Right-click the pet or the tray icon and choose **Open settings file**. Restart the pet after editing.
+Right-click the pet or the tray icon and choose **Open settings file** (`%APPDATA%\claude-pet\config.json`). Save your changes, then quit the pet and start it again to apply them. The pet keeps your edits even if it's still running while you edit: it only ever saves the settings you change from its menus.
+
+- A setting with the wrong type or an out-of-range value falls back to its default, and the pet tells you which one when it starts.
+- If the file isn't valid JSON (a trailing comma or a missing quote, say), the pet runs on default settings, saves a copy as `config.json.broken-<time>`, tells you, and leaves your file alone until you fix it and restart.
+- If Claude Pet can't start at all, it shows why and exits, so you can fix the problem and start it again. Errors are also written to `claude-pet.log` in the same folder.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `pollMinutes` | `2` | How often to check usage while Claude is running |
-| `idlePollMinutes` | `10` | How often to check while Claude is closed |
+| `pollMinutes` | `2` | How often to check usage while Claude is running (minutes, at least 1) |
+| `idlePollMinutes` | `10` | How often to check while Claude is closed (minutes, at least 1) |
 | `warnAtPercent` | `85` | When the pet starts looking worried |
 | `loungeAfterMinutes` | `3` | Minutes without touching the pet before it lies down |
 | `loungeOnTaskbar` | `true` | Drift down onto the taskbar before lounging |
 | `sleepWhenAwayMinutes` | `10` | Minutes without keyboard/mouse input before it sleeps |
 | `fidgets` | `true` | Occasional idle animations (if the pet has them) |
 | `roam` | `"taskbar"` | Free roam: `"off"`, `"taskbar"` or `"screen"` |
-| `roamMinMinutes` / `roamMaxMinutes` | `10` / `25` | How long it waits between trips |
+| `roamMinMinutes` / `roamMaxMinutes` | `10` / `25` | How long it waits between trips (minutes, at least 1) |
 | `strollPose` | `"float"` | Taskbar strolls: `"float"` at normal size, or `"walk"` with the compact walking gait |
-| `hooksPort` | `47821` | Local port Claude Code hooks send events to (reconnect after changing) |
+| `hooksPort` | `47821` | Local port Claude Code hooks send events to, 1024–65535 (reconnect after changing) |
 | `celebrateAfterSeconds` | `20` | Only celebrate Claude Code tasks that took at least this long |
-| `hideHotkey` | `CommandOrControl+Alt+P` | Show/hide shortcut |
+| `hideHotkey` | `CommandOrControl+Alt+P` | Show/hide shortcut; `null` for none |
 | `launchAtStartup` | `false` | Also toggleable from the tray menu |
 | `claudeProcessNames` | `["claude.exe", "claude"]` | Processes that count as "Claude is running" |
 | `scopedLimit` | `null` | Which per-model weekly limit to show (e.g. `"Fable"`); `null` = first one reported |
@@ -103,11 +107,13 @@ Right-click the pet or the tray icon and choose **Open settings file**. Restart 
 | `nightMode` | `"auto"` | Softer night glow: `true`, `false`, or `"auto"` (between `nightStartHour` and `nightEndHour`, default 22–7) |
 | `lightBackdrop` | `"auto"` | Stronger outline for light desktops: `true`, `false`, or `"auto"` (follows Windows theme) |
 | `credentialsPath` | `null` | Custom path to Claude Code's credentials file |
-| `pet` | `"celestial-fox"` | Folder name under `pets/` |
+| `pet` | `"celestial-fox"` | Which pet to show: the folder name of a built-in pet or one you added (letters, digits, `.`, `_` and `-` only) |
 
 ## Make your own pet
 
-A pet is a folder in `pets/` with a [Rive](https://rive.app) file and a `pet.json` that maps the app's values onto the file's view model:
+A pet is a folder with a [Rive](https://rive.app) file and a `pet.json` that maps the app's values onto the file's view model. Put your own pets in the `pets` folder next to your settings file, for example `%APPDATA%\claude-pet\pets\my-pet\pet.json`, then set `"pet": "my-pet"` in the settings. (The built-in pets are in the app's own `pets/` folder, which is read-only in the installed app.)
+
+If the chosen pet is missing, its `pet.json` has a mistake, or its Rive file can't be drawn, Claude Pet shows the built-in Celestial Fox instead and tells you what went wrong.
 
 ```json
 {
@@ -124,12 +130,14 @@ A pet is a folder in `pets/` with a [Rive](https://rive.app) file and a `pet.jso
 }
 ```
 
+- `file` (the `.riv` file in the same folder) and `states` (pose names mapped to numbers) are required.
 - `stateProperty`: a Number the app sets to one of the `states` values.
 - `usageProperties`: Numbers (0–100) for the orbs. Leave any out if your pet has no meters; the chips under the pet always show the numbers.
 - `lightBackdropProperty`: an optional Boolean.
 - Optional extras: `usageColorProperties` (Colors for the orb rings), `statsOpenProperty` / `statsSideProperty`, `hoveredProperty`, `lookXProperty` / `lookYProperty` (gaze, -1..1).
 - `reactions`: view-model Trigger names for `wake`, `appear` and `disappear`; `fidgets`: `{ "trigger", "ms", "states" }` entries played at random while idle (or in the listed states).
-- `bodyInsets` / `stateInsets`: how much of the pet box is transparent margin on each side (fractions), overall and per pose, so the body stays on screen.
+- `bodyInsets` / `stateInsets`: how much of the pet box is transparent margin on each side (fractions from 0 to 0.95), overall and per pose, so the body stays on screen. Pets that really turn can give `{ "left": {...}, "right": {...} }` with both directions.
+- `timings`: `disappearMs`, `goodbyeMs` and `statsMergeMs` in milliseconds; anything above 5000 is treated as 5000.
 
 See [pets/celestial-fox/state-map.md](pets/celestial-fox/state-map.md) for a full example.
 

@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('petHost', {
   dragMove: () => ipcRenderer.send('pet:drag-move'),
   dragEnd: () => ipcRenderer.send('pet:drag-end'),
   contextMenu: () => ipcRenderer.send('pet:context-menu'),
+  loadFailed: (message) => ipcRenderer.send('pet:load-failed', String(message).slice(0, 500)),
 });
 
 // Stats panel window

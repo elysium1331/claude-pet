@@ -7,6 +7,13 @@ const { parseUsage } = require('./usage-parse');
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const MIN_BACKOFF_MS = 5 * 60_000;
 const MAX_BACKOFF_MS = 30 * 60_000;
+const MIN_INTERVAL_MS = 60_000;
+
+// A zero, negative or non-numeric interval would poll back to back, so never check more than once a minute.
+function intervalMsFor(minutes) {
+  const ms = Number(minutes) * 60_000;
+  return Number.isFinite(ms) ? Math.max(MIN_INTERVAL_MS, ms) : MIN_INTERVAL_MS;
+}
 
 class UsageService extends EventEmitter {
   constructor({ credentialsPath, userAgent, cachePath, intervalMinutes, fakeUsagePath, offline = false }) {
@@ -16,7 +23,7 @@ class UsageService extends EventEmitter {
     this.cachePath = cachePath;
     this.fakeUsagePath = fakeUsagePath;
     this.offline = offline; // use only cached numbers; never contact Anthropic (test runs)
-    this.intervalMs = intervalMinutes * 60_000;
+    this.intervalMs = intervalMsFor(intervalMinutes);
     this.timer = null;
     this.backoffMs = 0;
     this.polling = false;
@@ -47,7 +54,7 @@ class UsageService extends EventEmitter {
   }
 
   setIntervalMinutes(minutes) {
-    const ms = minutes * 60_000;
+    const ms = intervalMsFor(minutes);
     if (ms === this.intervalMs) return;
     const wasSlower = ms < this.intervalMs;
     this.intervalMs = ms;
@@ -158,4 +165,4 @@ class UsageService extends EventEmitter {
   }
 }
 
-module.exports = { UsageService };
+module.exports = { UsageService, intervalMsFor, MIN_INTERVAL_MS };

@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { newLife, decay, reward, levelForXp, LEVEL_XP } = require('../src/main/pet-life');
+const {
+  newLife, decay, reward, levelForXp, LEVEL_XP, needsDecay, sanitizeLife,
+} = require('../src/main/pet-life');
 
 const HOUR = 3_600_000;
 const t0 = new Date(2026, 8, 14, 9, 0).getTime();
@@ -63,4 +65,28 @@ test('levels come from xp thresholds and report when the pet levels up', () => {
   assert.equal(result.leveledUp, true);
   result = reward(result.life, 'taskDone', t0 + 1000);
   assert.equal(result.leveledUp, false);
+});
+
+test('a clock moved back does not freeze decay or block feeding', () => {
+  const life = { ...newLife(t0 + 24 * HOUR), lastFedAt: t0 + 24 * HOUR }; // saved while the clock was a day ahead
+  assert.equal(needsDecay(life, t0), true);
+  assert.equal(needsDecay(newLife(t0), t0 + 30_000), false);
+  assert.equal(needsDecay(newLife(t0), t0 + 61_000), true);
+  const decayed = decay(life, t0);
+  assert.equal(decayed.happiness, life.happiness); // no negative time
+  assert.equal(decayed.updatedAt, t0);
+  const fed = reward(life, 'fed', t0);
+  assert.equal(fed.rewarded, true);
+  assert.equal(fed.life.lastFedAt, t0);
+});
+
+test('sanitizeLife repairs a damaged save instead of carrying NaN around', () => {
+  assert.deepEqual(sanitizeLife(null, t0), newLife(t0));
+  assert.deepEqual(sanitizeLife([1, 2], t0), newLife(t0));
+  const saved = { ...newLife(t0), happiness: 72.5, xp: 130, level: 2, lastFedAt: t0 - HOUR, playXp: { date: '2026-09-14', amount: 12 } };
+  assert.deepEqual(sanitizeLife(saved, t0 + HOUR), saved);
+  const repaired = sanitizeLife({ happiness: 'lots', xp: -4, updatedAt: 'yesterday', lastFedAt: {}, playXp: 3 }, t0);
+  assert.deepEqual(repaired, newLife(t0));
+  assert.equal(sanitizeLife({ happiness: 400, xp: 305 }, t0).happiness, 100);
+  assert.equal(sanitizeLife({ happiness: 400, xp: 305 }, t0).level, 3);
 });

@@ -10,10 +10,12 @@ const FALLBACK_STATES = {
   floatingTravel: 'chasing',
 };
 const LOOK_SMOOTHING = 0.18;
+const MAX_PENDING_REACTIONS = 10;
 
 let petConfig = null;
 let riveInstance = null;
 let riveReady = false;
+let riveFailed = false;
 let lastView = null;
 let stats = { open: false, side: 'above' };
 let hovered = false;
@@ -25,26 +27,39 @@ const look = { x: 0, y: 0, targetX: 0, targetY: 0 };
 // ---------- Rive ----------
 
 async function initPet() {
-  petConfig = await window.petHost.getConfig();
-  rive.RuntimeLoader.setWasmUrl(petConfig.wasmUrl);
-  riveInstance = new rive.Rive({
-    src: petConfig.petUrl,
-    canvas,
-    artboard: petConfig.artboard,
-    stateMachines: petConfig.stateMachine,
-    autoplay: true,
-    autoBind: true,
-    layout: new rive.Layout({ fit: rive.Fit.Contain, alignment: rive.Alignment.Center }),
-    onLoad: () => {
-      riveInstance.resizeDrawingSurfaceToCanvas();
-      riveReady = true;
-      applyPet();
-      if (petConfig.reactions?.appear) playReaction(petConfig.reactions.appear);
-      pendingReactions.splice(0).forEach(playReaction);
-      requestAnimationFrame(smoothLook);
-    },
-    onLoadError: (err) => console.error('[pet] could not load pet file', err),
-  });
+  try {
+    petConfig = await window.petHost.getConfig();
+    rive.RuntimeLoader.setWasmUrl(petConfig.wasmUrl);
+    riveInstance = new rive.Rive({
+      src: petConfig.petUrl,
+      canvas,
+      artboard: petConfig.artboard,
+      stateMachines: petConfig.stateMachine,
+      autoplay: true,
+      autoBind: true,
+      layout: new rive.Layout({ fit: rive.Fit.Contain, alignment: rive.Alignment.Center }),
+      onLoad: () => {
+        riveInstance.resizeDrawingSurfaceToCanvas();
+        riveReady = true;
+        applyPet();
+        if (petConfig.reactions?.appear) playReaction(petConfig.reactions.appear);
+        pendingReactions.splice(0).forEach(playReaction);
+        requestAnimationFrame(smoothLook);
+      },
+      onLoadError: (event) => reportLoadFailure(event?.data ?? event),
+    });
+  } catch (err) {
+    reportLoadFailure(err);
+  }
+}
+
+// Without WebGL2, a working wasm or a matching .riv nothing is drawn; tell the main process so it can react.
+function reportLoadFailure(err) {
+  if (riveFailed) return;
+  riveFailed = true;
+  pendingReactions.length = 0;
+  console.error('[pet] could not load pet file', err);
+  window.petHost.loadFailed(String(err?.message ?? err ?? 'unknown error'));
 }
 
 function viewModel() {
@@ -52,10 +67,10 @@ function viewModel() {
 }
 
 function stateValue(name) {
-  const states = petConfig.states;
-  if (name in states) return states[name];
+  const states = petConfig.states || {};
+  if (Object.hasOwn(states, name)) return states[name];
   const fallback = FALLBACK_STATES[name];
-  if (fallback in states) return states[fallback];
+  if (fallback && Object.hasOwn(states, fallback)) return states[fallback];
   return states.idle ?? 0;
 }
 
@@ -81,9 +96,11 @@ function setColor(vm, name, hex) {
 }
 
 function playReaction(name) {
+  if (riveFailed) return;
   const vm = viewModel();
   if (!vm) {
     pendingReactions.push(name);
+    if (pendingReactions.length > MAX_PENDING_REACTIONS) pendingReactions.shift();
     return;
   }
   const trigger = vm.trigger(name);

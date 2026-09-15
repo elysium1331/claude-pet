@@ -6,6 +6,7 @@ const HAPPINESS_START = 60;
 const HAPPINESS_FLOOR = 20;
 const HAPPINESS_DECAY_PER_HOUR = 2;
 const DAILY_PLAY_XP_CAP = 30;
+const DECAY_EVERY_MS = 60_000;
 
 const REWARDS = {
   petted: { happiness: 6, xp: 1, play: true },
@@ -28,6 +29,31 @@ function levelForXp(xp) {
   return level;
 }
 
+// A saved life read back from disk, with anything missing or nonsensical replaced by a fresh value.
+function sanitizeLife(raw, now = Date.now()) {
+  const fresh = newLife(now);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fresh;
+  const inRange = (v, min, max, fallback) => (Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback);
+  const xp = Math.round(inRange(raw.xp, 0, Number.MAX_SAFE_INTEGER, 0));
+  const play = raw.playXp;
+  const playXp = play && (play.date === null || typeof play.date === 'string') && Number.isFinite(play.amount)
+    ? { date: play.date, amount: Math.max(0, play.amount) }
+    : fresh.playXp;
+  return {
+    happiness: inRange(raw.happiness, 0, 100, fresh.happiness),
+    xp,
+    level: levelForXp(xp),
+    updatedAt: inRange(raw.updatedAt, 0, Number.MAX_SAFE_INTEGER, now),
+    lastFedAt: Number.isFinite(raw.lastFedAt) ? raw.lastFedAt : null,
+    playXp,
+  };
+}
+
+// Also true when updatedAt is in the future (the clock was moved back), so decay picks up from now again.
+function needsDecay(life, now = Date.now()) {
+  return Math.abs(now - life.updatedAt) > DECAY_EVERY_MS;
+}
+
 function decay(life, now = Date.now()) {
   const hours = Math.max(0, now - (life.updatedAt ?? now)) / 3_600_000;
   const happiness = Math.max(HAPPINESS_FLOOR, Math.min(life.happiness, life.happiness - hours * HAPPINESS_DECAY_PER_HOUR));
@@ -39,7 +65,9 @@ function reward(current, kind, now = Date.now()) {
   const rule = REWARDS[kind];
   const life = decay(current, now);
   if (!rule) return { life, rewarded: false, leveledUp: false };
-  if (rule.cooldownMs && life.lastFedAt && now - life.lastFedAt < rule.cooldownMs) {
+  // a feeding time in the future means the clock went back: don't let it block feeding until the clock catches up
+  const fedAt = life.lastFedAt;
+  if (rule.cooldownMs && fedAt && fedAt <= now && now - fedAt < rule.cooldownMs) {
     return { life, rewarded: false, leveledUp: false };
   }
 
@@ -63,4 +91,6 @@ function reward(current, kind, now = Date.now()) {
   return { life: next, rewarded: true, leveledUp: next.level > life.level };
 }
 
-module.exports = { LEVEL_XP, newLife, levelForXp, decay, reward };
+module.exports = {
+  LEVEL_XP, newLife, levelForXp, sanitizeLife, needsDecay, decay, reward,
+};

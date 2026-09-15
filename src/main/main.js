@@ -5,13 +5,18 @@ const {
   app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, globalShortcut, ipcMain, protocol, net, screen, shell,
   powerMonitor, dialog,
 } = require('electron');
-const { loadConfig, saveConfig, configPath } = require('./config');
+const {
+  DEFAULTS, loadConfig, saveConfigChanges, configPath,
+} = require('./config');
+const { readJsonFile, writeJsonAtomic, keepBrokenCopy } = require('./json-file');
+const { TIMING_MAX_MS, loadPetPack, loadPetOrFallback } = require('./pet-pack');
+const { resolveServedFile } = require('./served-files');
 const { defaultCredentialsPath } = require('./claude-auth');
 const { UsageService } = require('./usage-service');
 const { isClaudeRunning } = require('./claude-process');
 const { levelFor, colorForPercent, choosePetState, formatReset, formatCountdown, formatAgo } = require('./usage-parse');
 const {
-  ZERO_INSETS, clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored,
+  clampPet, panelPlacement, chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored,
 } = require('./placement');
 const {
   restingPose, insetsForState, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey, shouldGreet,
@@ -26,8 +31,11 @@ const {
   shouldStartRoam, planRoam, stepToward, roamDelayMs, roamPose: poseForRoam,
 } = require('./roam');
 
-const ROOT = path.join(__dirname, '..', '..');
-const SERVED_DIRS = ['src/renderer', 'node_modules/@rive-app/webgl2', 'pets'].map((d) => path.join(ROOT, d) + path.sep);
+const ROOT = path.join(__dirname, '..', '..'); // inside app.asar (read-only) in the installed build
+const DEFAULT_PET = DEFAULTS.pet;
+const QUIT_FALLBACK_MS = 2 * TIMING_MAX_MS + 2000; // quit even if the goodbye animation never finishes
+const POSITION_SAVE_DELAY_MS = 1000;
+const LOG_MAX_BYTES = 512 * 1024;
 const PET_SIZE = { width: 150, height: 160 }; // updated in place when the size setting changes
 const SIZE_OPTIONS = [['Small', 0.8], ['Normal', 1], ['Large', 1.25], ['Extra large', 1.5]];
 const PANEL_PAD = 14; // transparent room around the stats card for its shadow (matches panel.css)
@@ -60,6 +68,10 @@ if (args.snapshot) {
 if (!args.snapshot && !app.requestSingleInstanceLock()) {
   app.quit();
 }
+
+// Without these, Electron shows a blocking error box for any stray throw, which freezes the pet and its hook listener.
+process.on('uncaughtException', (err) => logError('uncaught exception', err));
+process.on('unhandledRejection', (reason) => logError('unhandled promise rejection', reason));
 
 let petWin = null;
 let panelWin = null;
@@ -98,6 +110,11 @@ let quitting = false;
 let appTimers = [];
 let life = null;
 let lifeSaveTimer = null;
+let configWritable = true; // false when config.json couldn't be read: never save over it that session
+let positionSaveTimer = null;
+let hotkeyLabel = null; // the show/hide shortcut, when it was accepted
+let petDrawFailed = false;
+let lastLogged = { text: '', at: 0 };
 let displayedGrowth = 0; // lags behind life.level until the level-up celebration plays
 let lastNightMode = null;
 let clickCount = 0;
@@ -137,25 +154,99 @@ function randomBetween(min, max) {
   return min + Math.random() * (max - min);
 }
 
-function loadPet(name) {
-  const dir = path.join(ROOT, 'pets', name);
-  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'pet.json'), 'utf8'));
-  return {
-    ...manifest,
-    bodyInsets: manifest.bodyInsets || ZERO_INSETS,
-    timings: { disappearMs: 0, goodbyeMs: 0, statsMergeMs: 0, ...manifest.timings },
-    dir,
-    url: `app://bundle/pets/${encodeURIComponent(name)}/${manifest.file}`,
+function logPath() {
+  return path.join(userDataDir(), 'claude-pet.log');
+}
+
+// Logs to the console and to claude-pet.log in the settings folder (a packaged app has no visible console).
+function logError(context, err) {
+  const text = `${context}: ${err?.stack || err}`;
+  console.error(`[main] ${text}`);
+  const now = Date.now();
+  if (text === lastLogged.text && now - lastLogged.at < 60_000) return; // the same throw on every tick
+  lastLogged = { text, at: now };
+  try {
+    const file = logPath();
+    if (fs.existsSync(file) && fs.statSync(file).size > LOG_MAX_BYTES) fs.rmSync(file, { force: true });
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, `${new Date(now).toISOString()} ${text}\n`);
+  } catch {
+    // logging must never throw
+  }
+}
+
+// Wraps timer and event callbacks so one bad value can't take down the loop that calls them.
+function guarded(context, fn) {
+  return (...fnArgs) => {
+    try {
+      return fn(...fnArgs);
+    } catch (err) {
+      logError(context, err);
+      return undefined;
+    }
   };
 }
 
+// Not awaited, so the pet keeps running while it is open.
+function showNotice(message, detail = '') {
+  console.warn(`[notice] ${message} ${detail}`);
+  if (args.snapshot) return;
+  dialog.showMessageBox({ type: 'warning', title: 'Claude Pet', message, detail, buttons: ['OK'] }).catch(() => {});
+}
+
+// ---------- pets ----------
+
+// Custom pets go in the settings folder, since the installed app's own files are read-only.
+function userPetsDir() {
+  return path.join(userDataDir(), 'pets');
+}
+
+function petRoots() {
+  return [
+    { dir: path.join(ROOT, 'pets'), urlBase: 'app://bundle/pets', builtIn: true },
+    { dir: userPetsDir(), urlBase: 'app://bundle/user-pets', builtIn: false },
+  ];
+}
+
 function serveAppFiles() {
+  const mounts = [
+    { prefix: 'src/renderer/', dir: path.join(ROOT, 'src', 'renderer') },
+    { prefix: 'node_modules/@rive-app/webgl2/', dir: path.join(ROOT, 'node_modules', '@rive-app', 'webgl2') },
+    { prefix: 'pets/', dir: path.join(ROOT, 'pets') },
+    { prefix: 'user-pets/', dir: userPetsDir() },
+  ];
   protocol.handle('app', (request) => {
-    const relative = decodeURIComponent(new URL(request.url).pathname).replace(/^\/+/, '');
-    const file = path.resolve(ROOT, relative);
-    if (!SERVED_DIRS.some((dir) => file.startsWith(dir))) return new Response('Not found', { status: 404 });
+    const file = resolveServedFile(new URL(request.url).pathname, mounts);
+    if (!file) return new Response('Not found', { status: 404 });
     return net.fetch(pathToFileURL(file).toString());
   });
+}
+
+// The pet file couldn't be drawn. A custom pet is swapped for the built-in one; if the built-in pet can't be drawn
+// either (no WebGL2, for example), the invisible window stops catching clicks and usage stays in the tray.
+function handlePetLoadFailure(message) {
+  logError(`drawing the pet "${pet.folder}"`, message);
+  if (pet.folder !== DEFAULT_PET) {
+    const failed = pet.folder;
+    try {
+      pet = loadPetPack(DEFAULT_PET, petRoots().filter((root) => root.builtIn));
+      showNotice(`The pet "${failed}" could not be drawn, so the built-in pet is shown instead.`, message);
+      tray?.setImage(trayIcon());
+      refreshTrayMenu();
+      petWin.webContents.reload();
+      settlePet();
+      return;
+    } catch (err) {
+      logError('loading the built-in pet', err);
+    }
+  }
+  if (petDrawFailed) return;
+  petDrawFailed = true;
+  petWin.setIgnoreMouseEvents(true);
+  showNotice(
+    'Claude Pet could not draw the pet on this computer.',
+    `Your usage is still available from the tray icon (hover it, or choose Show usage stats). Details: ${message}`,
+  );
 }
 
 // ---------- happiness and experience ----------
@@ -164,24 +255,37 @@ function lifePath() {
   return path.join(userDataDir(), 'pet-life.json');
 }
 
-function loadLife() {
+function loadLife(notices) {
+  const file = lifePath();
+  const read = readJsonFile(file);
+  if (read.status === 'ok') return petLife.sanitizeLife(read.value);
+  if (read.status === 'invalid') {
+    // keep the damaged file instead of silently saving a brand-new pet over it
+    try {
+      const copy = keepBrokenCopy(file);
+      notices.push(`Your pet's progress file was damaged, so it starts fresh. The old file was kept as ${copy}.`);
+    } catch (err) {
+      logError('keeping the damaged pet-life.json', err);
+    }
+  } else if (read.status === 'unreadable') {
+    logError('reading pet-life.json', read.error);
+  }
+  return petLife.newLife();
+}
+
+function saveLife() {
+  if (args.snapshot || !life) return;
   try {
-    return { ...petLife.newLife(), ...JSON.parse(fs.readFileSync(lifePath(), 'utf8')) };
-  } catch {
-    return petLife.newLife();
+    writeJsonAtomic(lifePath(), life);
+  } catch (err) {
+    console.warn('[life] could not save:', err.message);
   }
 }
 
 function scheduleLifeSave() {
   if (args.snapshot) return;
   clearTimeout(lifeSaveTimer);
-  lifeSaveTimer = setTimeout(() => {
-    try {
-      fs.writeFileSync(lifePath(), JSON.stringify(life));
-    } catch (err) {
-      console.warn('[life] could not save:', err.message);
-    }
-  }, 2000);
+  lifeSaveTimer = setTimeout(saveLife, 2000);
 }
 
 function rewardPet(kind) {
@@ -208,8 +312,7 @@ function nightModeOn(now = new Date()) {
 function setPetScale(scale) {
   const oldSize = { ...PET_SIZE };
   Object.assign(PET_SIZE, scaledPetSize(scale));
-  config.petScale = scale;
-  if (!args.snapshot) saveConfig(userDataDir(), config);
+  persistConfig({ petScale: scale });
   closeStats();
   cancelGlide();
   setPetBounds(resizeAnchored(petPos, oldSize, PET_SIZE));
@@ -222,9 +325,19 @@ function setTaskbarPose(pose) {
   tick();
 }
 
+// Updates settings in memory and saves only those keys, so edits made to config.json while the pet runs are kept.
+function persistConfig(changes) {
+  Object.assign(config, changes);
+  if (args.snapshot || !configWritable) return;
+  try {
+    saveConfigChanges(userDataDir(), changes);
+  } catch (err) {
+    console.warn('[config] could not save settings:', err.message);
+  }
+}
+
 function setAppearance(key, value) {
-  config[key] = value;
-  if (!args.snapshot) saveConfig(userDataDir(), config);
+  persistConfig({ [key]: value });
   pushView();
   refreshTrayMenu();
 }
@@ -369,8 +482,7 @@ async function toggleHooks() {
 function greetIfFirstToday() {
   if (!shouldGreet(config.lastGreetDate)) return;
   if (!playEvent('greet')) return;
-  config.lastGreetDate = localDateKey();
-  if (!args.snapshot) saveConfig(userDataDir(), config);
+  persistConfig({ lastGreetDate: localDateKey() });
 }
 
 // ---------- pet behavior ----------
@@ -447,7 +559,7 @@ function tick() {
     pushView();
   }
 
-  if (now - life.updatedAt > 60_000) {
+  if (petLife.needsDecay(life, now)) {
     const before = Math.round(life.happiness);
     life = petLife.decay(life, now);
     scheduleLifeSave();
@@ -526,7 +638,7 @@ function startChase() {
   markInteraction();
   chase = { until: Date.now() + CHASE_MS, timer: null };
   pushView();
-  chase.timer = setInterval(chaseStep, 30);
+  chase.timer = setInterval(guarded('chase', chaseStep), 30);
 }
 
 function chaseStep() {
@@ -603,7 +715,7 @@ function startRoam() {
   roam = { plan, home: { ...petPos }, index: 0, pauseUntil: 0, waitingSince: 0, timer: null, startAt };
   if (wasResting) sendReaction(pet.reactions?.wake);
   pushView();
-  roam.timer = setInterval(roamStep, ROAM_STEP_MS);
+  roam.timer = setInterval(guarded('roam', roamStep), ROAM_STEP_MS);
 }
 
 function roamStep() {
@@ -720,10 +832,21 @@ function movePet(pos, workArea = workAreaAt(petCenter(pos))) {
   return placed;
 }
 
+// Runs after every settle, which Claude Code activity triggers often: write only real moves, at most once a second.
 function savePetPosition() {
-  if (args.snapshot) return;
-  config.petPosition = petPos;
-  saveConfig(userDataDir(), config);
+  if (args.snapshot || !petPos) return;
+  const saved = config.petPosition;
+  if (saved && saved.x === petPos.x && saved.y === petPos.y) return;
+  config.petPosition = { ...petPos };
+  clearTimeout(positionSaveTimer);
+  positionSaveTimer = setTimeout(flushPetPosition, POSITION_SAVE_DELAY_MS);
+}
+
+function flushPetPosition() {
+  if (!positionSaveTimer) return;
+  clearTimeout(positionSaveTimer);
+  positionSaveTimer = null;
+  persistConfig({ petPosition: config.petPosition });
 }
 
 function initialPetPosition() {
@@ -756,7 +879,7 @@ function glideTo(target, duration, onDone) {
     return;
   }
   const started = Date.now();
-  glide = setInterval(() => {
+  glide = setInterval(guarded('glide', () => {
     const t = Math.min(1, (Date.now() - started) / duration);
     const eased = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
     setPetBounds({
@@ -767,7 +890,7 @@ function glideTo(target, duration, onDone) {
       cancelGlide();
       onDone?.();
     }
-  }, 16);
+  }), 16);
 }
 
 // Slide (briefly) into the current pose's on-screen bounds.
@@ -927,7 +1050,10 @@ function toggleVisible() {
 
 // Wave goodbye, fade out, then quit.
 function quitWithGoodbye() {
-  if (quitting) return;
+  if (quitting) {
+    app.quit(); // asked again while it waves: don't make them wait
+    return;
+  }
   closeStats();
   const waved = playEvent('goodbye');
   quitting = true;
@@ -937,6 +1063,7 @@ function quitWithGoodbye() {
     if (fades) sendReaction(pet.reactions.disappear);
     setTimeout(() => app.quit(), fades ? pet.timings.disappearMs : 0);
   }, waveMs);
+  setTimeout(() => app.quit(), QUIT_FALLBACK_MS);
 }
 
 function windowAlive(win) {
@@ -1035,7 +1162,7 @@ function buildMenu() {
         { label: 'Night glow: never', type: 'radio', checked: config.nightMode === false, click: () => setAppearance('nightMode', false) },
       ],
     },
-    { label: petWin?.isVisible() ? 'Hide pet' : 'Show pet', accelerator: config.hideHotkey, registerAccelerator: false, click: toggleVisible },
+    { label: petWin?.isVisible() ? 'Hide pet' : 'Show pet', accelerator: hotkeyLabel ?? undefined, registerAccelerator: false, click: toggleVisible },
     { label: 'Refresh usage now', click: () => usage.refreshNow() },
     { label: 'Open Claude usage page', click: () => shell.openExternal(USAGE_PAGE) },
     { type: 'separator' },
@@ -1067,11 +1194,34 @@ function loginItemSettings() {
   return { openAtLogin: !!config.launchAtStartup, ...devArgs };
 }
 
+// Applied at every launch, so setting launchAtStartup to false in config.json also removes the startup entry.
+function syncLoginItem() {
+  if (args.snapshot) return;
+  try {
+    app.setLoginItemSettings(loginItemSettings());
+  } catch (err) {
+    logError('updating the startup entry', err);
+  }
+}
+
 function setLaunchAtStartup(enabled) {
-  config.launchAtStartup = enabled;
-  saveConfig(userDataDir(), config);
-  app.setLoginItemSettings(loginItemSettings());
+  persistConfig({ launchAtStartup: enabled });
+  syncLoginItem();
   refreshTrayMenu();
+}
+
+// Returns a notice when the configured shortcut isn't usable.
+function registerHotkey() {
+  if (args.snapshot || !config.hideHotkey) return null;
+  try {
+    if (!globalShortcut.register(config.hideHotkey, toggleVisible)) {
+      console.warn(`[hotkey] could not register ${config.hideHotkey} (in use by another app?)`);
+    }
+    hotkeyLabel = config.hideHotkey;
+    return null;
+  } catch (err) {
+    return `hideHotkey "${config.hideHotkey}" is not a shortcut Claude Pet understands, so there is no show/hide hotkey (${err.message}).`;
+  }
 }
 
 // ---------- Claude app detection ----------
@@ -1083,14 +1233,17 @@ async function detectClaude() {
 
 async function watchClaude() {
   if (quitting) return;
-  const running = await detectClaude();
-  if (quitting) return;
-  if (running !== claudeRunning) {
-    claudeRunning = running;
-    usage.setIntervalMinutes(running ? config.pollMinutes : config.idlePollMinutes);
-    tick();
+  try {
+    const running = await detectClaude();
+    if (!quitting && running !== claudeRunning) {
+      claudeRunning = running;
+      usage.setIntervalMinutes(running ? config.pollMinutes : config.idlePollMinutes);
+      tick();
+    }
+  } catch (err) {
+    logError('checking whether Claude is running', err);
   }
-  setTimeout(watchClaude, CLAUDE_CHECK_MS);
+  if (!quitting) setTimeout(watchClaude, CLAUDE_CHECK_MS);
 }
 
 // ---------- IPC ----------
@@ -1105,6 +1258,11 @@ function registerIpc() {
     states: pet.states,
     reactions: pet.reactions,
   }));
+
+  ipcMain.on('pet:load-failed', (event, message) => {
+    if (!windowAlive(petWin) || event.sender !== petWin.webContents) return;
+    handlePetLoadFailure(String(message));
+  });
 
   ipcMain.on('pet:drag-start', () => {
     cancelGlide();
@@ -1196,16 +1354,35 @@ function scheduleSnapshot() {
   }, args.snapshotDelay);
 }
 
-app.whenReady().then(async () => {
-  config = loadConfig(userDataDir());
-  pet = loadPet(config.pet);
-  life = loadLife();
+function configNotices(loaded) {
+  const notices = [];
+  if (loaded.error) {
+    notices.push(`${loaded.error}. The pet is using default settings and won't change the file until you fix it and restart.`
+      + `${loaded.brokenCopy ? ` A copy was saved as ${loaded.brokenCopy}.` : ''}`);
+  }
+  if (loaded.problems.length) {
+    notices.push(`Some settings in config.json are not valid:\n${loaded.problems.map((p) => `• ${p.message}`).join('\n')}`);
+  }
+  return notices;
+}
+
+async function startApp() {
+  const loaded = loadConfig(userDataDir());
+  config = loaded.config;
+  configWritable = loaded.writable;
+  const notices = configNotices(loaded);
+
+  const chosen = loadPetOrFallback(config.pet, { roots: petRoots(), fallback: DEFAULT_PET });
+  pet = chosen.pet;
+  if (chosen.notice) notices.push(chosen.notice);
+  life = loadLife(notices);
   displayedGrowth = life.level;
   Object.assign(PET_SIZE, scaledPetSize(args.scale ?? config.petScale));
   serveAppFiles();
   registerIpc();
 
-  claudeRunning = await detectClaude();
+  // Process detection runs in the background (tasklist can be slow); until it answers, assume Claude is running.
+  claudeRunning = args.claudeRunning ? args.claudeRunning === 'true' : true;
   usage = new UsageService({
     credentialsPath: config.credentialsPath || defaultCredentialsPath(),
     userAgent: `claude-pet/${app.getVersion()}`,
@@ -1215,46 +1392,63 @@ app.whenReady().then(async () => {
     // snapshot runs reuse saved numbers so repeated test launches don't get rate limited by Anthropic
     offline: !!args.snapshot && !args.liveUsage,
   });
-  usage.on('update', handleUsageUpdate);
+  usage.on('update', guarded('usage update', handleUsageUpdate));
 
   activity = new ClaudeActivity({ celebrateAfterMs: config.celebrateAfterSeconds * 1000 });
-  if (!args.snapshot || args.debugHooks) startHookServer({ port: config.hooksPort, onEvent: handleHookEvent, onStatus: statusSnapshot });
+  if (!args.snapshot || args.debugHooks) {
+    try {
+      startHookServer({ port: config.hooksPort, onEvent: guarded('Claude Code hook', handleHookEvent), onStatus: statusSnapshot });
+    } catch (err) {
+      logError('starting the hook listener', err);
+    }
+  }
 
   createPetWindow();
   updateFacing();
   createPanelWindow();
   createTray();
-  if (!args.snapshot && !globalShortcut.register(config.hideHotkey, toggleVisible)) {
-    console.warn(`[hotkey] could not register ${config.hideHotkey} (in use by another app?)`);
-  }
-  if (config.launchAtStartup && !args.snapshot) app.setLoginItemSettings(loginItemSettings());
+  const hotkeyNotice = registerHotkey();
+  if (hotkeyNotice) notices.push(hotkeyNotice);
+  syncLoginItem();
 
   // Taskbar moved, resolution changed or a monitor was unplugged: keep the pet on screen.
-  const reclamp = () => {
+  const reclamp = guarded('keeping the pet on screen', () => {
     movePet(petPos);
     updateFacing();
-  };
+  });
   screen.on('display-metrics-changed', reclamp);
   screen.on('display-removed', reclamp);
 
   nextFidgetAt = Date.now() + randomBetween(15_000, 30_000);
   scheduleNextRoam();
   usage.start();
-  setTimeout(watchClaude, CLAUDE_CHECK_MS);
-  appTimers.push(setInterval(tick, TICK_MS), setInterval(trackCursor, LOOK_MS));
-  nativeTheme.on('updated', pushView);
+  watchClaude();
+  appTimers.push(setInterval(guarded('tick', tick), TICK_MS), setInterval(guarded('gaze', trackCursor), LOOK_MS));
+  nativeTheme.on('updated', guarded('theme change', pushView));
   if (args.snapshot) scheduleSnapshot();
-});
+  if (notices.length) showNotice('Claude Pet started, but some things need your attention.', notices.join('\n\n'));
+}
+
+// A half-started app would hold the single-instance lock with no window or tray, so every relaunch would do nothing.
+function failStartup(err) {
+  logError('startup', err);
+  if (!args.snapshot) {
+    dialog.showErrorBox(
+      'Claude Pet could not start',
+      `${err?.message || err}\n\nIf you edited config.json or added a pet, check those changes and start Claude Pet again. `
+        + `Details were saved to ${logPath()}.`,
+    );
+  }
+  app.exit(1);
+}
+
+app.whenReady().then(startApp).catch(failStartup);
 
 app.on('before-quit', stopTimers);
 app.on('second-instance', () => windowAlive(petWin) && showPet());
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
-  if (life && !args.snapshot) {
-    try {
-      fs.writeFileSync(lifePath(), JSON.stringify(life));
-    } catch {
-      // best effort
-    }
-  }
+  flushPetPosition();
+  clearTimeout(lifeSaveTimer);
+  saveLife();
 });
