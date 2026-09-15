@@ -36,11 +36,19 @@ test('the license is MIT from elysium1331 everywhere it is stated', () => {
 
 test('README "Make your own pet" documents every reaction the app plays', () => {
   const main = read('src', 'main', 'main.js');
-  const names = unique([
+  const fromMain = [
     ...matches(main, /playEvent\('(\w+)'\)/g),
     ...matches(main, /pet\.reactions\??\.(\w+)/g),
-  ]);
-  assert.ok(names.length > 15, 'found the reactions in main.js');
+  ];
+  // Hook and usage reactions are returned as lists that main.js passes to playEvent one by one.
+  const fromHooks = matches(read('src', 'main', 'claude-activity.js'), /\[(?:\.\.\.\w+, )?'(\w+)'\]/g);
+  const usageEvents = read('src', 'main', 'behavior.js').match(/function usageEvents[\s\S]*?\n\}/)?.[0] ?? '';
+  const fromUsage = matches(usageEvents, /return \['(\w+)'\]/g);
+  assert.ok(unique(fromMain).length >= 16, 'found the reactions in main.js');
+  assert.deepEqual(unique(fromHooks), ['alert', 'approve', 'error', 'taskDone'], 'found the hook reactions');
+  assert.deepEqual(unique(fromUsage), ['limitHit', 'usageReset'], 'found the usage reactions');
+  const names = unique([...fromMain, ...fromHooks, ...fromUsage]);
+  assert.ok(names.length >= 22);
   assert.deepEqual(missingFrom(section('Make your own pet'), names), []);
 });
 

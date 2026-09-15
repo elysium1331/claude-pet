@@ -147,7 +147,7 @@ The smallest pet needs only a file and its poses:
 }
 ```
 
-The built-in [pets/celestial-fox/pet.json](pets/celestial-fox/pet.json) uses every option below, and [pets/celestial-fox/state-map.md](pets/celestial-fox/state-map.md) describes how its Rive file is built to match: its view model, poses and triggers.
+The built-in [pets/celestial-fox/pet.json](pets/celestial-fox/pet.json) is a full working example that uses most of the options below (it leaves `trayIcon` at its default and uses one form of `stateMachine` and `bodyInsets`), and [pets/celestial-fox/state-map.md](pets/celestial-fox/state-map.md) describes how its Rive file is built to match: its view model, poses and triggers.
 
 Pets are drawn with the Rive WebGL2 runtime 2.42.1, which binds the artboard's default view model instance. Every property and trigger name in `pet.json` refers to that view model; names the file doesn't have are skipped. Each key is checked when the pet loads: a value of the wrong shape names the problem and shows the built-in pet instead, and keys the app doesn't know are ignored.
 
