@@ -26,9 +26,13 @@ function pointerPlan({ cursor, petPos, petSize, insets, holding = false }) {
 
 // Whether a window's real bounds differ from where it should be. Windows can move or resize a window behind the
 // app's back (a fullscreen game changing resolution, a DPI change), so the real bounds are what must be compared.
+// On a scaled display Windows rounds a window to whole device pixels, and reports a size a pixel or two off the one
+// it was given: that is not a difference, or the bounds would be set again every time the pet is checked.
+const ROUNDING_SLACK = 2;
+
 function boundsDiffer(actual, wanted) {
   if (!actual || !wanted) return true;
-  return ['x', 'y', 'width', 'height'].some((key) => actual[key] !== wanted[key]);
+  return ['x', 'y', 'width', 'height'].some((key) => Math.abs(actual[key] - wanted[key]) > ROUNDING_SLACK);
 }
 
 module.exports = { pointerPlan, hitAreaBounds, boundsDiffer };

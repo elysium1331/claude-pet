@@ -47,13 +47,18 @@ test('the insets for the side the pet faces decide where its body is', () => {
   assert.equal(hitAreaBounds(petPos, petSize, facingLeft).x, 53);
 });
 
-test('boundsDiffer notices a window Windows moved, resized or never placed', () => {
+test('boundsDiffer notices a window Windows moved or resized, but not its own rounding', () => {
   const wanted = { x: 27, y: 971, width: 118, height: 61 };
   assert.equal(boundsDiffer({ ...wanted }, wanted), false);
-  assert.equal(boundsDiffer({ ...wanted, x: 28 }, wanted), true);
+  // On a scaled display Windows rounds a window to whole device pixels and reports back a size a pixel or two off.
+  // Treating that as a difference would set the bounds again every time the pet is checked, for ever.
+  assert.equal(boundsDiffer({ ...wanted, width: 119 }, wanted), false);
+  assert.equal(boundsDiffer({ x: 28, y: 970, width: 120, height: 63 }, wanted), false);
+  // a real move or resize
+  assert.equal(boundsDiffer({ ...wanted, x: 31 }, wanted), true);
   assert.equal(boundsDiffer({ ...wanted, y: 0 }, wanted), true);
-  assert.equal(boundsDiffer({ ...wanted, width: 119 }, wanted), true); // e.g. rescaled by a display change
-  assert.equal(boundsDiffer({ ...wanted, height: 60 }, wanted), true);
+  assert.equal(boundsDiffer({ ...wanted, width: 40 }, wanted), true);
+  assert.equal(boundsDiffer({ ...wanted, height: 20 }, wanted), true);
   assert.equal(boundsDiffer(null, wanted), true);
   assert.equal(boundsDiffer({ ...wanted }, null), true);
 });

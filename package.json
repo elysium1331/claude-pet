@@ -1,7 +1,7 @@
 {
   "name": "claude-pet",
   "productName": "Claude Pet",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Meet Lumi: an animated desktop pet for Windows that shows your Claude plan usage at a glance and reacts to Claude Code. Unofficial; not affiliated with Anthropic.",
   "main": "src/main/main.js",
   "private": true,
