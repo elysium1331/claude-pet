@@ -24,4 +24,11 @@ function pointerPlan({ cursor, petPos, petSize, insets, holding = false }) {
   return { overBody, hovered: overBody || holding };
 }
 
-module.exports = { pointerPlan, hitAreaBounds };
+// Whether a window's real bounds differ from where it should be. Windows can move or resize a window behind the
+// app's back (a fullscreen game changing resolution, a DPI change), so the real bounds are what must be compared.
+function boundsDiffer(actual, wanted) {
+  if (!actual || !wanted) return true;
+  return ['x', 'y', 'width', 'height'].some((key) => actual[key] !== wanted[key]);
+}
+
+module.exports = { pointerPlan, hitAreaBounds, boundsDiffer };

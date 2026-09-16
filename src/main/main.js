@@ -24,7 +24,7 @@ const {
   ZERO_INSETS, clampPet, displayLimits, groundBelow, nearestDisplay, taskbarEdge, combinedInsets, panelPlacement,
   chooseFacing, mirrorInsets, scaledPetSize, resizeAnchored, positionChanged,
 } = require('./placement');
-const { pointerPlan, hitAreaBounds } = require('./click-through');
+const { pointerPlan, hitAreaBounds, boundsDiffer } = require('./click-through');
 const {
   restingPose, insetsForState, wokeUp, wakeReaction, fidgetsFor, lookFromCursor, usageEvents, localDateKey,
   shouldGreet, isNightTime, resolveState, usageRose,
@@ -646,6 +646,11 @@ function statusSnapshot() {
     taskbarEdge: petPos ? taskbarEdge(layoutAt(petCenter()).display) : null, // null: hidden, or not on the pet's display
     statsOpen,
     roaming: !!roam,
+    petWindow: windowAlive(petWin) ? { visible: petWin.isVisible(), onTop: petWin.isAlwaysOnTop(), bounds: petWin.getBounds() } : null,
+    hitArea: windowAlive(hitWin)
+      ? { visible: hitWin.isVisible(), onTop: hitWin.isAlwaysOnTop(), bounds: hitWin.getBounds(), wanted: pointer.hitBounds }
+      : null,
+    pointerOverBody: pointer.overBody,
     visible: petVisible(),
   };
 }
@@ -1131,6 +1136,7 @@ function createPetWindow() {
     greetAt = Date.now() + GREET_DELAY_MS;
   });
   hideInsteadOfClosing(petWin);
+  reloadIfRendererDies(petWin, 'pet');
   petWin.on('blur', closeStats); // clicking anywhere else closes the stats
   petWin.webContents.on('did-finish-load', () => {
     pointer.hovered = false; // a freshly loaded page isn't showing a hover
@@ -1145,12 +1151,24 @@ function createHitAreaWindow() {
   hitWin = new BrowserWindow({ ...baseWindowOptions(), ...hitAreaBounds(petPos, PET_SIZE, currentInsets()) });
   hitWin.setAlwaysOnTop(true, 'floating');
   hideInsteadOfClosing(hitWin);
+  reloadIfRendererDies(hitWin, 'hit area');
   hitWin.on('blur', closeStats); // the window a click on the pet gives focus to: clicking anywhere else closes the stats
   hitWin.webContents.on('did-finish-load', () => {
     pressed = false; // a freshly loaded page has no press under way
     updatePointer();
   });
   hitWin.loadURL('app://bundle/src/renderer/hit-area.html');
+}
+
+// A renderer can be killed by a GPU reset (common when a fullscreen game starts or exits) or by running out of memory.
+// The window then stays on screen drawing nothing and answering nothing, so load its page again.
+function reloadIfRendererDies(win, label) {
+  win.webContents.on('render-process-gone', (_event, details) => {
+    const reason = details?.reason ?? 'unknown';
+    logError(`the ${label} window stopped (${reason})`, new Error(reason));
+    if (!quitting && windowAlive(win)) win.reload();
+  });
+  win.webContents.on('unresponsive', () => logError(`the ${label} window stopped responding`, new Error('unresponsive')));
 }
 
 // Alt+F4 on a focused pet window would destroy it while the app keeps running in the tray: hide the pet instead.
@@ -1260,7 +1278,7 @@ function showPet() {
   hideTimer = null;
   hiding = false;
   petWin.showInactive();
-  updatePointer(); // the hit area comes back with the pet
+  resurfacePet(); // a fullscreen game may have reordered the windows: back on top, hit area over the body
   sendReaction(pet.reactions?.appear); // also undoes a disappear still playing, which would hold the pet invisible
   if (wasHidden) greetAt = Date.now() + GREET_DELAY_MS;
   refreshTrayMenu();
@@ -1382,12 +1400,28 @@ function placeHitArea() {
     return;
   }
   const bounds = hitAreaBounds(petPos, PET_SIZE, currentInsets());
-  const last = pointer.hitBounds;
-  if (!last || last.x !== bounds.x || last.y !== bounds.y || last.width !== bounds.width || last.height !== bounds.height) {
-    pointer.hitBounds = bounds;
-    hitWin.setBounds(bounds);
-  }
+  pointer.hitBounds = bounds;
+  // Compared with where the window really is, not with the last bounds asked for: Windows moves and rescales windows
+  // behind the app's back (a fullscreen game changing resolution, a DPI change). A hit area left behind would take the
+  // pet's clicks somewhere else on screen, leaving a pet that is drawn normally but ignores every click.
+  if (boundsDiffer(hitWin.getBounds(), bounds)) hitWin.setBounds(bounds);
   if (!hitWin.isVisible()) hitWin.showInactive();
+}
+
+// Windows can drop a window's always-on-top flag and reorder it while a fullscreen game runs, which can leave the hit
+// area under another window: the pet is drawn but takes no clicks. Anything that brings the pet back re-asserts both.
+function resurfacePet() {
+  if (windowAlive(petWin) && petWin.isVisible()) {
+    petWin.setAlwaysOnTop(true, 'floating');
+    petWin.setIgnoreMouseEvents(true);
+    const wanted = { ...petPos, ...PET_SIZE };
+    if (petPos && boundsDiffer(petWin.getBounds(), wanted)) petWin.setBounds(wanted);
+  }
+  updatePointer(); // places and shows the hit area
+  if (windowAlive(hitWin) && hitWin.isVisible()) {
+    hitWin.setAlwaysOnTop(true, 'floating');
+    hitWin.moveTop(); // above the pet window, and above whatever the game left on top
+  }
 }
 
 // ---------- tray ----------
@@ -1736,8 +1770,8 @@ async function startApp() {
 
   // Taskbar moved, resolution changed or a monitor was unplugged: keep the pet on screen.
   const reclamp = guarded('keeping the pet on screen', () => {
-    pointer.hitBounds = null; // Windows may have resized the hit area for the new display: set its bounds again
     movePet(petPos);
+    resurfacePet(); // the new layout may have moved the windows or dropped their always-on-top
     // A trip was planned for the old layout, and may lead onto a display that's gone: head home instead.
     if (roam) cancelRoam({ returnHome: true });
     else updateFacing();

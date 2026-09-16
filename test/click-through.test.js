@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { pointerPlan, hitAreaBounds } = require('../src/main/click-through');
+const { pointerPlan, hitAreaBounds, boundsDiffer } = require('../src/main/click-through');
 
 // The bundled fox lounging on a 1920x1080 display's taskbar, facing right: its body is the bottom 40% of the box,
 // x 27.15..144.75 and y 971..1032.28.
@@ -45,4 +45,15 @@ test('the insets for the side the pet faces decide where its body is', () => {
   assert.equal(plan({ x: 40, y: 1000 }).overBody, true);
   assert.equal(pointerPlan({ cursor: { x: 40, y: 1000 }, petPos, petSize, insets: facingLeft }).overBody, false);
   assert.equal(hitAreaBounds(petPos, petSize, facingLeft).x, 53);
+});
+
+test('boundsDiffer notices a window Windows moved, resized or never placed', () => {
+  const wanted = { x: 27, y: 971, width: 118, height: 61 };
+  assert.equal(boundsDiffer({ ...wanted }, wanted), false);
+  assert.equal(boundsDiffer({ ...wanted, x: 28 }, wanted), true);
+  assert.equal(boundsDiffer({ ...wanted, y: 0 }, wanted), true);
+  assert.equal(boundsDiffer({ ...wanted, width: 119 }, wanted), true); // e.g. rescaled by a display change
+  assert.equal(boundsDiffer({ ...wanted, height: 60 }, wanted), true);
+  assert.equal(boundsDiffer(null, wanted), true);
+  assert.equal(boundsDiffer({ ...wanted }, null), true);
 });

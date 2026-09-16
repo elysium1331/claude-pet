@@ -40,7 +40,22 @@ class FakeWindow extends EventEmitter {
 
   loadURL(url) { this.url = url; }
 
-  setAlwaysOnTop() { this.alive(); }
+  // Windows can clear always-on-top and reorder windows while a fullscreen app runs, so the app re-asserts both.
+  setAlwaysOnTop(onTop) {
+    this.alive();
+    this.onTop = onTop !== false;
+  }
+
+  isAlwaysOnTop() {
+    this.alive();
+    return !!this.onTop;
+  }
+
+  moveTop() {
+    this.alive();
+    FakeWindow.raises += 1;
+    this.raisedAt = FakeWindow.raises;
+  }
 
   showInactive() {
     this.alive();
@@ -84,6 +99,8 @@ class FakeWindow extends EventEmitter {
     this.emit('closed');
   }
 }
+
+FakeWindow.raises = 0;
 
 function fakeElectron(tmp) {
   const paths = { temp: tmp, appData: tmp };
@@ -836,4 +853,41 @@ test('a copy started while the pet runs quits without starting, so the hooks tok
   assert.deepEqual(listens, []);
   assert.equal(fs.existsSync(path.join(tmp, 'claude-pet', 'hooks-token.json')), false);
   assert.equal(fs.readFileSync(path.join(tmp, 'claude', 'settings.json'), 'utf8'), settings);
+});
+
+test('a hit area that Windows moved behind the app goes back over the body of the pet', async (t) => {
+  const app = await startMain(t);
+  app.tick(1100);
+  const wanted = app.hitWin.getBounds();
+
+  // What a fullscreen game changing resolution can do: Windows moves and rescales the window, and the app is not told.
+  app.hitWin.bounds = { x: 0, y: 0, width: 40, height: 20 };
+  app.tick(200); // the hover check runs every 50 ms
+
+  assert.deepEqual(app.hitWin.getBounds(), wanted, 'the hit area is put back over the body');
+  assert.ok(inside(app.bodyCenter(), app.hitWin.getBounds()));
+});
+
+test('showing the pet after a fullscreen game puts it back on top, with the hit area above it', async (t) => {
+  const app = await startMain(t);
+  app.tick(1100);
+  app.clickMenu('Hide pet');
+  app.tick(2000);
+  assert.equal(app.hitWin.isVisible(), false);
+
+  // While it was hidden a fullscreen game took the top spot, and Windows cleared both windows' always-on-top.
+  app.petWin.onTop = false;
+  app.hitWin.onTop = false;
+  const raisedBefore = app.hitWin.raisedAt ?? 0;
+
+  app.clickMenu('Show pet');
+  app.tick(200);
+
+  assert.equal(app.petWin.isVisible(), true);
+  assert.equal(app.hitWin.isVisible(), true);
+  assert.equal(app.petWin.isAlwaysOnTop(), true);
+  assert.equal(app.hitWin.isAlwaysOnTop(), true);
+  assert.ok((app.hitWin.raisedAt ?? 0) > raisedBefore, 'the hit area is raised above the pet window');
+  assert.ok(inside(app.bodyCenter(), app.hitWin.getBounds()), 'clicks on the body reach the hit area again');
+  assert.deepEqual(app.petWin.mouse, { ignore: true, forward: false });
 });
